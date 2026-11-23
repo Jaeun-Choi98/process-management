@@ -1,0 +1,191 @@
+/* ── Reset ─────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+/* ── Page layout ───────────────────────────────────── */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 28px 24px 48px;
+}
+
+.page-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Forms ─────────────────────────────────────────── */
+.input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 11px;
+  font-size: 0.8125rem;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  min-width: 0;
+  font-family: inherit;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ── Buttons ───────────────────────────────────────── */
+.btn {
+  border: none;
+  border-radius: var(--radius);
+  padding: 6px 16px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--cyan);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* ── Feedback ──────────────────────────────────────── */
+.api-error {
+  margin-top: 10px;
+  color: var(--error);
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  background: var(--error-bg);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--error);
+  /* 설정 검사 에러처럼 여러 줄인 메시지 */
+  white-space: pre-wrap;
+}
+
+/* ── 아이콘 버튼 (✕ ▲ ▼ ↻) ─────────────────────────── */
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.btn-icon:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-icon:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── 작은 글자 버튼 (로그 · 시작 · 중지) ──────────────── */
+.btn-text {
+  padding: 3px 9px;
+  font-family: inherit;
+  font-size: 0.72rem;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-text:hover:not(:disabled) { border-color: var(--accent); }
+.btn-text:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-text-ok { color: var(--success); }
+.btn-text-ok:hover:not(:disabled) { border-color: var(--success); }
+.btn-text-danger { color: var(--error); }
+.btn-text-danger:hover:not(:disabled) { border-color: var(--error); }
+
+/* ── 상태 점: ok 초록, warn 주황(일부 중지), error 빨강, idle 회색(확인 전), loading 파랑(작업 중) ── */
+.status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  background: var(--text-muted);
+  border-radius: 50%;
+}
+
+.status-dot.status-ok { background: var(--success); }
+.status-dot.status-warn { background: var(--warning); }
+.status-dot.status-error { background: var(--error); }
+.status-dot.status-loading { background: var(--accent); animation: status-pulse 1s infinite ease-in-out; }
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 사이드바에서 선택한 카드를 잠깐 강조한다. (Dashboard 에서 클래스를 붙였다 뗀다) */
+.card-focused {
+  animation: card-flash 1.6s ease-out;
+}
+
+@keyframes card-flash {
+  0%, 30% {
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+  100% {
+    border-color: var(--border);
+    background: var(--surface);
+  }
+}
+
+/* ── App ───────────────────────────────────────────── */
+.App {
+  min-height: 100vh;
+}

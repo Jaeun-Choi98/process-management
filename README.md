@@ -100,7 +100,7 @@
 - 배열 순서가 화면 표시 순서입니다.
 - 저장할 때 설정 창을 연 시점의 `version`(파일 내용의 hash)을 같이 보내, 그 사이 `감시` 창 · 다른 사용자 · 직접 수정으로
   파일이 바뀌었으면 덮어쓰지 않고 거부합니다(409). 설정 창은 열 때마다 최신 설정을 다시 읽습니다.
-- 규칙은 프론트(`src/config/schema.ts`)와 Go 서버(`go-server/internal/processes/config.go`)가 같은 내용으로 검사합니다.
+- 규칙은 프론트(`frontend/src/utils/schema.ts`)와 Go 서버(`backend/internal/service/process-service/config.go`)가 같은 내용으로 검사합니다.
 - 중지는 match 로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
 - 예전 설정은 읽을 때 패턴으로 바뀌고, 다음 저장 때 패턴으로 저장됩니다.
   `logFile: /a/app.log` → `[/a/app.log]`, `logDir: /a/logs` → `[/a/logs/*, /a/logs/*/*]`, `configDir: /a/conf` → `[/a/conf/*.ini, /a/conf/*/*.ini]`
@@ -119,23 +119,25 @@ SSH 접속은 Go 서버만 할 수 있으므로 개발 중에도 Go 서버를 �
 
 ```bash
 # 1) Go 서버 (:8088)
-cd go-server/cmd/server
+cd backend/cmd/server
+cp example.env.ini env.ini   # 처음 한 번
 go run .
 
 # 2) 화면 (:3000, /api 는 :8088 로 전달)
+cd frontend
 npm install
 npm start
 ```
 
 Go 서버 주소가 다르면 `API_PROXY_TARGET=http://localhost:9000 npm start` 처럼 지정합니다.
-`src/setupProxy.js` 를 수정하면 `npm start` 를 다시 시작해야 합니다.
+`frontend/src/setupProxy.js` 를 수정하면 `npm start` 를 다시 시작해야 합니다.
 
 ### 배포
 
 ```bash
-npm run build
-rsync -a --delete build/ go-server/cmd/server/build/
-cd go-server/cmd/server && go build -o main . && ./main
+cd frontend && npm run build && cd ..
+rsync -a --delete frontend/build/ backend/cmd/server/build/
+cd backend/cmd/server && go build -o main . && ./main
 ```
 
 `data/`(설정 · known_hosts)는 `build/` 밖에 있으므로 재배포해도 유지됩니다. git 에는 올리지 않습니다.
@@ -143,12 +145,19 @@ cd go-server/cmd/server && go build -o main . && ./main
 ## 폴더 구조
 
 ```
-src/
-  config/
-    types.ts                 설정(processes.json) · 상태 응답 타입
-    schema.ts                설정 검사 (화면 · 가져오기 · 불러오기 공통)
+CLAUDE.md                    개발 규칙
+backend/                     Go 서버 (아래)
+frontend/                    React 화면 (아래)
+
+frontend/src/
+  api/client.ts              API 호출 공통 함수 (fetch 래퍼, 에러 문구 처리)
+  types/config.ts            설정(processes.json) · 상태 응답 타입
+  utils/schema.ts            설정 검사 (화면 · 가져오기 · 불러오기 공통)
+  styles/
+    tokens.css               색상 등 디자인 토큰 (CSS 변수)
+    global.css               공통 스타일 (버튼 · 입력칸 · 상태 점 · 레이아웃)
   hooks/
-    useProcessConfig.ts      설정 조회/저장(/api/config) + API 호출 공통 함수
+    useProcessConfig.ts      설정 조회/저장(/api/config)
     useGroupStatus.ts        그룹 상태 폴링(/api/status)
   components/
     Header/                  그룹 탭 (/all: 전체 + 모든 그룹, /uw: 그 그룹만)
@@ -163,12 +172,24 @@ src/
   App.tsx                    경로 라우팅 (/ → /all)
   setupProxy.js              npm start 에서 /api 를 Go 서버로 전달
 
-go-server/internal/
-  processes/
-    config.go                설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
-    remote.go                SSH 연결 재사용 · 명령 실행 · known_hosts 확인
-    monitor.go               ps 로 상태 확인, kill · 시작 스크립트로 제어
-    files.go                 패턴에 맞는 로그 · INI 파일 목록(ls), 로그 tail, INI 읽기 · 쓰기, 경로 확인
-    watchdog.go              자동 재시작 감시 (watchName · watchArgs), 감시 조건 확인
-  transport/rest.go          /api 핸들러
+backend/
+  cmd/server/
+    main.go                  진입점 (TEST: 한 번 실행, PRODUCT: 비정상 종료 시 재시작)
+    example.env.ini          설정 예시. env.ini 로 복사해 사용 (env.ini 는 git 에 올리지 않음)
+    build/                   화면 빌드 결과 (frontend 에서 npm run build 후 복사)
+  internal/
+    app/                     시작 · 종료 순서
+    config/                  env.ini 로더
+    container/               설정 저장소 · 모니터 · REST 서버 조립
+    service/process-service/
+      config.go              설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
+      remote.go              SSH 연결 재사용 · 명령 실행 · known_hosts 확인
+      monitor.go             ps 로 상태 확인, kill · 시작 스크립트로 제어
+      files.go               패턴에 맞는 로그 · INI 파일 목록(ls), 로그 tail, INI 읽기 · 쓰기, 경로 확인
+      watchdog.go            자동 재시작 감시 (watchName · watchArgs), 감시 조건 확인
+    transport/http-rest/
+      rest.go                HTTP 서버 (미들웨어 · SPA 핸들러 연결, 시작 · 종료)
+      controller/            /api 경로 등록과 핸들러
+      middleware/            CORS · 요청 로그 · SPA
+      request/               요청 본문 타입
 ```
