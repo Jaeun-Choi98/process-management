@@ -29,7 +29,7 @@
 | 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 실행 판단 조건으로 찾은 값. 조건이 없으면 중지 · 재시작하지 않음) |
 | 시작 | 아래 명령 (스크립트가 있는 폴더에서 백그라운드로 실행, 출력은 버림) |
 | 프로그램 업데이트 · 폴더 목록 | 홈 폴더 아래인지 확인(`cd ~ && pwd -P` 기준, 심볼릭 링크를 따라간 실제 경로) 뒤 `LC_ALL=C ls -lnAL -- '<폴더>'` |
-| 프로그램 업데이트 · 바꾸기 | 대상 옆 임시 폴더(`.<이름>.update.XXXXXX`)에 `tar --no-same-owner -xf -` 로 푼 뒤, 끝까지 받은 것을 확인하고 `mv <대상> <대상>.bak.<YYYYMMDD-HHmmss>` → `mv <임시>/<이름> <대상>` (실패하면 되돌림) |
+| 프로그램 업데이트 · 바꾸기 | 대상 옆 임시 폴더(`.<이름>.update.XXXXXX`)에 `tar --no-same-owner -xzf -` 로 푼 뒤 (Go 서버가 gzip 으로 압축해 보냄), 끝까지 받은 것을 확인하고 `mv <대상> <대상>.bak.<YYYYMMDD-HHmmss>` → `mv <임시>/<이름> <대상>` (실패하면 되돌림) |
 
 ```
 cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 2>&1 < /dev/null &
@@ -281,6 +281,33 @@ INI 파일 패턴에 맞는 `path`(절대 경로) 파일을 통째로 읽습니�
 - 프로세스 id 는 폴더 이름(소문자, 겹치면 `-2` …), 시작 스크립트는 서버 기본 폴더 아래면 상대 경로로 등록합니다. 실행 판단 조건은 비워 둡니다.
   화면은 시작한 뒤 새로 뜬 프로세스로 `PUT /api/processes/:id/watch` 를 보내 조건을 정합니다.
 - 받는 방식 · 중간에 끊겼을 때의 처리는 업데이트와 같습니다. 올리기 전에 이름 · 경로 · 등록 가능 여부를 먼저 확인합니다(`400`).
+
+### POST /api/uploads?name=myapp-1.2.tar.gz
+
+압축 파일(`.zip` `.tar.gz` `.tgz` `.tar`)을 Go 서버에 받아 두고 목록을 돌려줍니다. 본문은 압축 파일 그대로, `Content-Type: application/octet-stream`.
+쓰지 않으면 1시간 뒤 지웁니다. 최대 크기는 `env.ini` `[UPLOAD] MAX_MB` (넘으면 `413`).
+
+```json
+{ "id": "3f2a...", "name": "myapp-1.2.tar.gz", "format": "tar.gz", "root": "myapp-1.2", "files": 120, "bytes": 35000000,
+  "entries": [{ "path": "bin/start.sh", "type": "file", "size": 120, "exec": true }, { "path": "lib/a.so", "type": "link", "target": "a.so.1" }] }
+```
+
+- `root`: 맨 위가 폴더 하나뿐이면 그 이름. `entries` 는 그것을 벗긴 경로입니다. 폴더 항목은 따로 없을 수 있습니다.
+- 폴더 · 파일 · 압축 파일 안을 가리키는 링크만 받습니다. (`..` · 절대 경로 · 밖을 가리키는 링크 · 하드 링크 · 장치 파일은 `400`)
+- macOS 가 넣는 `__MACOSX/` · `._*` · `.DS_Store` 는 뺍니다. 푼 크기가 받은 크기의 50배를 넘으면 `400`.
+
+### DELETE /api/uploads/:id
+
+받아 둔 압축 파일을 지웁니다. (창을 닫을 때) 응답 `204`.
+
+### POST /api/servers/:id/install-upload
+
+받아 둔 압축 파일로 설치합니다. 본문 `{"upload": "<id>", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱"}`. 응답 · 규칙은 `install` 과 같습니다.
+설치하면 받아 둔 파일을 지웁니다. 실패하면 남겨 두어 다시 시도할 수 있습니다.
+
+### POST /api/servers/:id/update-upload
+
+받아 둔 압축 파일로 서버의 폴더를 바꿉니다. 본문 `{"upload": "<id>", "path": "/home/ops/myapp"}`. 응답 · 규칙은 `update`(`kind=dir`)와 같습니다.
 
 ### GET /api/servers/:id/ps
 

@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import { ProcessEntry, RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from '../../types/config';
 import { requestApi, uploadApi } from '../../api/client';
+import { ARCHIVE_ACCEPT, archiveBaseName, deleteUpload, saveUpload } from '../../api/uploads';
 import { buildTar } from '../../utils/tar';
-import { buildLocalTree, describeLocal, Kind, LocalNode, tarEntries } from '../../utils/localFiles';
+import { buildLocalTree, describeLocal, Kind, LocalNode, tarEntries, treeFromUpload } from '../../utils/localFiles';
 import { formatDateTime, formatSize } from '../../utils/format';
 import { baseDirOf, hasCondition, scriptPath } from '../../utils/schema';
 import './ProgramUpdate.css';
@@ -60,6 +61,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   const [localSelected, setLocalSelected] = useState<LocalNode | null>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const archiveInput = useRef<HTMLInputElement>(null);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,24 +72,41 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   const [restarting, setRestarting] = useState<string | null>(null);
   const [restartResults, setRestartResults] = useState<RestartResult[]>([]);
   /** 올린 바이트 수 / 전체. 다 올린 뒤에는 서버가 확인하고 바꾸는 동안 기다린다. */
-  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{ loaded: number; total: number; doneText: string } | null>(null);
 
+  /** 폴더를 연다. 열면 그 폴더(실제 경로)를, 못 열면 null 을 돌려준다. */
   const loadRemote = useCallback(
-    async (path: string) => {
+    async (path: string): Promise<RemoteDir | null> => {
       setRemoteLoading(true);
       setRemoteError(null);
       try {
         const query = path ? `?${new URLSearchParams({ path })}` : '';
-        setRemote(await requestApi<RemoteDir>(`${base}/browse${query}`));
+        const dir = await requestApi<RemoteDir>(`${base}/browse${query}`);
+        setRemote(dir);
         setRemoteSelected(null);
+        return dir;
       } catch (e) {
         setRemoteError(e instanceof Error ? e.message : String(e));
+        return null;
       } finally {
         setRemoteLoading(false);
       }
     },
     [base]
   );
+
+  /** 프로세스 버튼으로 연 폴더와 그 안의 시작 파일 이름 (목록에서 강조) */
+  const [scriptHint, setScriptHint] = useState<{ dir: string; name: string; process: string } | null>(null);
+  /** 프로세스의 시작 파일이 있는 폴더로 바로 간다. */
+  const jumpToProcess = async (p: ProcessEntry) => {
+    const script = scriptPath(p.startScript, baseDir);
+    if (!script) return;
+    const slash = script.lastIndexOf('/');
+    const dir = await loadRemote(script.slice(0, slash) || '/');
+    setScriptHint(dir ? { dir: dir.path, name: script.slice(slash + 1), process: p.label || p.id } : null);
+  };
+  /** 시작 파일이 있는 프로세스 (프로세스 버튼) */
+  const jumpTargets = processes.filter(p => p.startScript);
 
   // 서버 기본 폴더(비워 두면 /home/<user>)에서 시작한다. 열 수 없으면(없음 · 홈 밖) 실제 홈 폴더.
   const baseDir = baseDirOf(server);
@@ -107,22 +126,58 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     folderInput.current?.setAttribute('webkitdirectory', '');
   }, []);
 
+  /** 압축 파일을 열었으면 그 압축 파일 (Go 서버에 받아 둔 것) */
+  const archive = localPath[0]?.children[0]?.upload;
+
+  /** 닫을 때 받아 둔 압축 파일을 지운다. (업데이트에 쓴 것은 Go 서버가 이미 지웠다) */
+  const close = () => {
+    if (archive) void deleteUpload(archive.id);
+    onClose();
+  };
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
   useEffect(() => {
-    const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && !busy && onClose();
+    const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && !busy && closeRef.current();
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [busy, onClose]);
+  }, [busy]);
+
+  /** 내 PC 쪽에 보여줄 것을 바꾼다. 고른 것이 하나뿐이므로 바로 선택해 둔다. 전에 받아 둔 압축 파일은 지운다. */
+  const showLocal = (root: LocalNode) => {
+    if (archive && archive.id !== root.children[0]?.upload?.id) void deleteUpload(archive.id);
+    setLocalPath([root]);
+    setLocalSelected(root.children[0] ?? null);
+    setResult(null);
+  };
 
   const pickLocal = (e: React.ChangeEvent<HTMLInputElement>, folder: boolean) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = '';
     if (files.length === 0) return;
     const folderName = folder ? files[0].webkitRelativePath.split('/')[0] : undefined;
-    const root = buildLocalTree(files, folderName);
-    setLocalPath([root]);
-    // 고른 것이 하나뿐이므로 바로 선택해 둔다.
-    setLocalSelected(root.children[0] ?? null);
-    setResult(null);
+    showLocal(buildLocalTree(files, folderName));
+  };
+
+  /** 압축 파일은 바로 Go 서버에 올려 두고(목록 확인) 폴더처럼 보여준다. 업데이트할 때 그것을 쓴다. */
+  const pickArchive = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const doneText = '다 올렸습니다. 압축 파일 목록을 읽는 중...';
+    setBusy(true);
+    setError(null);
+    setProgress({ loaded: 0, total: file.size, doneText });
+    try {
+      const upload = await saveUpload(file, (loaded, total) => setProgress({ loaded, total, doneText }));
+      const node = treeFromUpload(upload, upload.root || archiveBaseName(file.name));
+      showLocal({ ...node, name: '', upload: undefined, children: [node] });
+    } catch (err) {
+      setError(`압축 파일을 올리지 못했습니다: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setProgress(null);
+      setBusy(false);
+    }
   };
 
   // 서버 쪽 대상을 고르면 관련 있어 보이는 프로세스를 재시작 대상으로 미리 체크한다.
@@ -191,12 +246,24 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     setResult(null);
     setRestartResults([]);
     try {
-      const body = buildTar(tarEntries(localSelected, name));
-      setProgress({ loaded: 0, total: body.size });
-      const query = new URLSearchParams({ path: remoteSelected.path, kind: remoteSelectedKind });
-      const updated = await uploadApi<UpdateResult>(`${base}/update?${query}`, body, 'application/x-tar', (loaded, total) =>
-        setProgress({ loaded, total })
-      );
+      let updated: UpdateResult;
+      if (localSelected.upload) {
+        // 압축 파일: 이미 Go 서버에 있으므로 풀어서 서버로 보내기만 한다. (폴더로만 바꿀 수 있다)
+        setProgress({ loaded: 1, total: 1, doneText: '압축을 풀어 서버로 보내고 바꾸는 중...' });
+        updated = await requestApi<UpdateResult>(`${base}/update-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ upload: localSelected.upload.id, path: remoteSelected.path }),
+        });
+      } else {
+        const body = buildTar(tarEntries(localSelected, name));
+        const doneText = '다 올렸습니다. 서버에서 확인하고 바꾸는 중...';
+        setProgress({ loaded: 0, total: body.size, doneText });
+        const query = new URLSearchParams({ path: remoteSelected.path, kind: remoteSelectedKind });
+        updated = await uploadApi<UpdateResult>(`${base}/update?${query}`, body, 'application/x-tar', (loaded, total) =>
+          setProgress({ loaded, total, doneText })
+        );
+      }
       setResult(updated);
     } catch (e) {
       // 업데이트가 실패하면 재시작하지 않는다.
@@ -250,7 +317,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   );
 
   return (
-    <div className="program-update-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && onClose()}>
+    <div className="program-update-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && close()}>
       <div className="program-update" role="dialog" aria-modal="true" aria-label="프로그램 업데이트">
         <header className="program-update-header">
           <div>
@@ -260,7 +327,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
               {server.user}@{server.host}
             </span>
           </div>
-          <button className="btn-icon" onClick={onClose} disabled={busy} title="닫기 (Esc)">
+          <button className="btn-icon" onClick={close} disabled={busy} title="닫기 (Esc)">
             <Icon name="close" />
           </button>
         </header>
@@ -275,6 +342,22 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 <Icon name="refresh" />
               </button>
             </div>
+            {jumpTargets.length > 0 && (
+              <div className="program-update-jump" aria-label="프로세스 폴더로 가기">
+                <span>프로세스</span>
+                {jumpTargets.map(p => (
+                  <button
+                    key={p.id}
+                    className="btn-text"
+                    onClick={() => jumpToProcess(p)}
+                    disabled={busy || remoteLoading}
+                    title={`${scriptPath(p.startScript, baseDir)} 이(가) 있는 폴더로 갑니다`}
+                  >
+                    {p.label || p.id}
+                  </button>
+                ))}
+              </div>
+            )}
             {remoteError && <div className="program-update-error">{remoteError}</div>}
             {remoteLoading && !remote ? (
               <div className="program-update-placeholder">불러오는 중...</div>
@@ -284,6 +367,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 {remote.entries.length === 0 && <li className="program-update-placeholder">빈 폴더입니다.</li>}
                 {remote.entries.map(entry => {
                   const kind = remoteKind(entry);
+                  const isScript = scriptHint?.dir === remote.path && scriptHint.name === baseName(entry.path);
                   return row(
                     entry.path,
                     kind,
@@ -291,12 +375,15 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                     remoteSelected?.path === entry.path,
                     () => kind && setRemoteSelected(entry),
                     kind === 'dir' ? () => loadRemote(entry.path) : null,
-                    kind === 'file' ? `${formatSize(entry.size)} · ${entry.modified}` : kind === 'dir' ? entry.modified : '바꿀 수 없는 항목'
+                    (isScript ? `${scriptHint?.process} 시작 파일 · ` : '') +
+                      (kind === 'file' ? `${formatSize(entry.size)} · ${entry.modified}` : kind === 'dir' ? entry.modified : '바꿀 수 없는 항목')
                   );
                 })}
               </ul>
             ) : null}
-            <small className="program-update-hint">SSH 계정의 홈 폴더 아래만 볼 수 있습니다. 두 번 누르면 폴더를 엽니다.</small>
+            <small className="program-update-hint">
+              위의 프로세스를 누르면 그 시작 파일이 있는 폴더로 갑니다. SSH 계정의 홈 폴더 아래만 볼 수 있습니다. 두 번 누르면 폴더를 엽니다.
+            </small>
           </section>
 
           {/* 오른쪽: 내 PC */}
@@ -312,7 +399,12 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 <Icon name="file" />
                 파일 열기
               </button>
+              <button className="btn btn-secondary" onClick={() => archiveInput.current?.click()} disabled={busy} title="zip · tar.gz · tgz · tar 를 폴더처럼 올립니다">
+                <Icon name="file" />
+                압축 파일
+              </button>
               <input ref={folderInput} type="file" hidden onChange={e => pickLocal(e, true)} />
+              <input ref={archiveInput} type="file" accept={ARCHIVE_ACCEPT} hidden onChange={pickArchive} />
               <input ref={fileInput} type="file" hidden onChange={e => pickLocal(e, false)} />
             </div>
             {!localDir ? (
@@ -329,7 +421,8 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                     node.kind,
                     node.name,
                     localSelected === node,
-                    () => setLocalSelected(node),
+                    // 압축 파일은 통째로만 쓴다. 안의 항목은 둘러보기만 한다.
+                    () => (archive && !node.upload ? undefined : setLocalSelected(node)),
                     node.kind === 'dir' ? () => setLocalPath(path => [...path, node]) : null,
                     node.kind === 'file' && node.file
                       ? `${formatSize(node.bytes)} · ${formatDateTime(node.file.lastModified)}`
@@ -389,7 +482,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 <progress value={progress.loaded} max={progress.total || 1} />
                 <span>
                   {uploaded
-                    ? '다 올렸습니다. 서버에서 확인하고 바꾸는 중...'
+                    ? progress.doneText
                     : `올리는 중 ${formatSize(progress.loaded)} / ${formatSize(progress.total)} (${percent}%)`}
                 </span>
               </div>
@@ -409,7 +502,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
             ))}
           </div>
           <div className="program-update-actions">
-            <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
+            <button className="btn btn-secondary" onClick={close} disabled={busy}>
               닫기
             </button>
             <button className="btn btn-primary" onClick={runUpdate} disabled={!ready}>

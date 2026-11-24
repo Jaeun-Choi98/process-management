@@ -4,6 +4,8 @@
  */
 export async function requestApi<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...init });
+  // 본문 없는 성공 (DELETE 등)
+  if (response.status === 204) return undefined as T;
   const isJson = (response.headers.get('content-type') ?? '').includes('application/json');
   const body = isJson ? await response.json() : null;
   if (!response.ok) {

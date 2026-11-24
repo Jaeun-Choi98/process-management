@@ -156,6 +156,31 @@ export interface RemoteEntry {
   modified: string;
 }
 
+/** POST /api/uploads 응답: Go 서버에 받아 둔 압축 파일 (1시간 뒤 지워진다) */
+export interface UploadInfo {
+  id: string;
+  /** 올린 파일 이름 */
+  name: string;
+  format: 'zip' | 'tar.gz' | 'tar';
+  /** 벗겨 낸 맨 위 폴더 (myapp-1.2/... 이면 myapp-1.2) */
+  root?: string;
+  /** root 를 벗긴 경로 */
+  entries: UploadEntry[];
+  files: number;
+  /** 압축을 푼 크기 */
+  bytes: number;
+}
+
+export interface UploadEntry {
+  path: string;
+  type: 'dir' | 'file' | 'link';
+  size?: number;
+  /** 실행 권한이 있는 파일 */
+  exec?: boolean;
+  /** 링크가 가리키는 곳 */
+  target?: string;
+}
+
 /** POST /api/servers/:id/update 응답 */
 export interface UpdateResult {
   /** 바뀐 대상 */

@@ -20,15 +20,16 @@ import (
 type Controller struct {
 	store   *processes.Store
 	monitor *processes.Monitor
+	uploads *processes.Uploads
 }
 
-func NewController(store *processes.Store, monitor *processes.Monitor) *Controller {
-	return &Controller{store: store, monitor: monitor}
+func NewController(store *processes.Store, monitor *processes.Monitor, uploads *processes.Uploads) *Controller {
+	return &Controller{store: store, monitor: monitor, uploads: uploads}
 }
 
 // RoutePath 는 API 를 등록한다. API 는 /api 아래에 두고, 매칭되지 않은 경로는 rest 의 NoRoute(SPA 핸들러)가 처리한다.
 func (ctl *Controller) RoutePath(router *gin.Engine) {
-	store, monitor := ctl.store, ctl.monitor
+	store, monitor, uploads := ctl.store, ctl.monitor, ctl.uploads
 
 	api := router.Group("/api")
 	api.GET("/health", func(c *gin.Context) {
@@ -57,6 +58,11 @@ func (ctl *Controller) RoutePath(router *gin.Engine) {
 	api.GET("/servers/:id/ps", handleRunningProcesses(monitor))
 	api.POST("/servers/:id/update", requireTar, handleUpdate(monitor))
 	api.POST("/servers/:id/install", requireTar, handleInstall(monitor))
+	// 압축 파일(zip · tar.gz)로 설치 · 업데이트: 먼저 받아 두고(목록 확인) 그것으로 설치 · 업데이트한다.
+	api.POST("/uploads", requireContentType("application/octet-stream"), handleSaveUpload(uploads))
+	api.DELETE("/uploads/:id", handleDeleteUpload(uploads))
+	api.POST("/servers/:id/install-upload", requireJSON, handleInstallUpload(monitor, uploads))
+	api.POST("/servers/:id/update-upload", requireJSON, handleUpdateUpload(monitor, uploads))
 }
 
 // handleLogConfig 는 현재 로그 레벨을 돌려준다. 쿼리를 주면 레벨을 바꾼 뒤 돌려준다.
@@ -91,12 +97,16 @@ func requireJSON(c *gin.Context) {
 
 // requireTar 는 업데이트 요청에 Content-Type: application/x-tar 를 요구한다.
 // requireJSON 과 같은 이유(다른 사이트의 <form> 은 이 헤더로 보낼 수 없다)로 CSRF 를 막는다.
-func requireTar(c *gin.Context) {
-	if c.ContentType() != "application/x-tar" {
-		c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type: application/x-tar 가 필요합니다"})
-		return
+var requireTar = requireContentType("application/x-tar")
+
+func requireContentType(contentType string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.ContentType() != contentType {
+			c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type: " + contentType + " 이(가) 필요합니다"})
+			return
+		}
+		c.Next()
 	}
-	c.Next()
 }
 
 // respondError 는 화면에 보여줄 오류(UserError)는 그 상태 코드로, SSH 실패 등은 502 로 응답한다.
@@ -334,7 +344,7 @@ func handleUpdate(monitor *processes.Monitor) gin.HandlerFunc {
 		id, target, kind := c.Param("id"), c.Query("path"), c.Query("kind")
 		logger.Warnf("[REST] program update requested: %s %s (%s, %d bytes), remote: %s", id, target, kind, c.Request.ContentLength, c.ClientIP())
 
-		result, err := monitor.UpdateRemote(c.Request.Context(), id, target, kind, c.Request.Body, c.Request.ContentLength)
+		result, err := monitor.UpdateRemote(c.Request.Context(), id, target, kind, processes.BrowserTar(c.Request.Body, c.Request.ContentLength))
 		if err != nil {
 			logger.Warnf("[REST] program update failed: %s %s, err: %v", id, target, err)
 			// 다 받기 전에 실패해도 응답이 브라우저에 닿도록 남은 본문을 마저 읽는다.
@@ -368,7 +378,7 @@ func handleInstall(monitor *processes.Monitor) gin.HandlerFunc {
 		req := processes.InstallRequest{Target: c.Query("path"), StartFile: c.Query("start"), Label: c.Query("label")}
 		logger.Warnf("[REST] program install requested: %s %s (start %s, %d bytes), remote: %s", id, req.Target, req.StartFile, c.Request.ContentLength, c.ClientIP())
 
-		result, err := monitor.InstallRemote(c.Request.Context(), id, req, c.Request.Body, c.Request.ContentLength)
+		result, err := monitor.InstallRemote(c.Request.Context(), id, req, processes.BrowserTar(c.Request.Body, c.Request.ContentLength))
 		if err != nil {
 			logger.Warnf("[REST] program install failed: %s %s, err: %v", id, req.Target, err)
 			// 다 받기 전에 실패해도 응답이 브라우저에 닿도록 남은 본문을 마저 읽는다.
@@ -377,6 +387,84 @@ func handleInstall(monitor *processes.Monitor) gin.HandlerFunc {
 			return
 		}
 		logger.Warnf("[REST] program installed: %s %s -> process %s (%d files, %d bytes)", id, result.Path, result.ProcessID, result.Files, result.Bytes)
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+// POST /api/uploads?name=myapp-1.2.tar.gz ( 본문: 압축 파일 ) : 압축 파일을 받아 두고 안의 목록을 돌려준다.
+// 쓰지 않으면 1시간 뒤 지운다. 최대 크기는 env.ini [UPLOAD] MAX_MB.
+func handleSaveUpload(uploads *processes.Uploads) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		upload, err := uploads.Save(c.Query("name"), c.Request.Body)
+		if err != nil {
+			logger.Warnf("[REST] upload failed: %s, remote: %s, err: %v", c.Query("name"), c.ClientIP(), err)
+			respondError(c, err)
+			return
+		}
+		logger.Infof("[REST] upload saved: %s (%s, %d files), remote: %s", upload.Name, upload.ID, upload.Files, c.ClientIP())
+		c.JSON(http.StatusOK, upload)
+	}
+}
+
+// DELETE /api/uploads/:id : 받아 둔 압축 파일을 지운다. ( 창을 닫았을 때 )
+func handleDeleteUpload(uploads *processes.Uploads) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uploads.Delete(c.Param("id"))
+		c.Status(http.StatusNoContent)
+	}
+}
+
+// POST /api/servers/:id/install-upload {"upload": "...", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱"} : 받아 둔 압축 파일로 설치
+func handleInstallUpload(monitor *processes.Monitor, uploads *processes.Uploads) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body request.InstallUpload
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "본문 형식이 올바르지 않습니다: " + err.Error()})
+			return
+		}
+		upload, err := uploads.Get(body.Upload)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		id := c.Param("id")
+		logger.Warnf("[REST] program install requested: %s %s from %s (start %s), remote: %s", id, body.Path, upload.Name, body.Start, c.ClientIP())
+		req := processes.InstallRequest{Target: body.Path, StartFile: body.Start, Label: body.Label}
+		result, err := monitor.InstallRemote(c.Request.Context(), id, req, upload.Source())
+		if err != nil {
+			logger.Warnf("[REST] program install failed: %s %s, err: %v", id, body.Path, err)
+			respondError(c, err)
+			return
+		}
+		uploads.Delete(upload.ID)
+		logger.Warnf("[REST] program installed: %s %s -> process %s (%d files, %d bytes)", id, result.Path, result.ProcessID, result.Files, result.Bytes)
+		c.JSON(http.StatusOK, result)
+	}
+}
+
+// POST /api/servers/:id/update-upload {"upload": "...", "path": "/home/ops/myapp"} : 받아 둔 압축 파일로 서버의 폴더를 바꾼다.
+func handleUpdateUpload(monitor *processes.Monitor, uploads *processes.Uploads) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body request.UpdateUpload
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "본문 형식이 올바르지 않습니다: " + err.Error()})
+			return
+		}
+		upload, err := uploads.Get(body.Upload)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		id := c.Param("id")
+		logger.Warnf("[REST] program update requested: %s %s from %s, remote: %s", id, body.Path, upload.Name, c.ClientIP())
+		result, err := monitor.UpdateRemote(c.Request.Context(), id, body.Path, processes.UpdateDir, upload.Source())
+		if err != nil {
+			logger.Warnf("[REST] program update failed: %s %s, err: %v", id, body.Path, err)
+			respondError(c, err)
+			return
+		}
+		uploads.Delete(upload.ID)
+		logger.Warnf("[REST] program updated: %s %s -> backup %s (%d files, %d bytes)", id, result.Path, result.Backup, result.Files, result.Bytes)
 		c.JSON(http.StatusOK, result)
 	}
 }

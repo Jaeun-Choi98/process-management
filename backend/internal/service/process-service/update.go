@@ -1,11 +1,8 @@
 package processes
 
 import (
-	"archive/tar"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"sort"
@@ -81,7 +78,7 @@ fi
 [ -w "$p" ] || fail "$p 에 쓰기 권한이 없습니다"
 tmp=$(mktemp -d "$p/.$n.update.XXXXXX") || fail '임시 폴더를 만들지 못했습니다'
 trap 'rm -rf -- "$tmp"' EXIT
-tar --no-same-owner -xf - -C "$tmp" || fail '받은 내용을 풀지 못했습니다'
+tar --no-same-owner -xzf - -C "$tmp" || fail '받은 내용을 풀지 못했습니다'
 new=$tmp/$n
 [ "$(ls -A -- "$tmp")" = "$n" ] || fail '받은 내용이 올바르지 않습니다'
 if [ "$kind" = dir ]; then
@@ -152,10 +149,9 @@ func (m *Monitor) BrowseRemote(ctx context.Context, serverID, dir string) (*Remo
 	return result, nil
 }
 
-// UpdateRemote 는 서버의 target(kind: dir · file)을 body 의 tar 내용으로 바꾼다.
-// body 의 항목은 모두 target 의 이름(폴더면 그 아래)이어야 한다. size 는 요청 본문 길이(모르면 -1)로,
-// 끝까지 받았는지 확인하는 데 쓴다.
-func (m *Monitor) UpdateRemote(ctx context.Context, serverID, target, kind string, body io.Reader, size int64) (*UpdateResult, error) {
+// UpdateRemote 는 서버의 target(kind: dir · file)을 src 의 내용으로 바꾼다.
+// src 의 항목은 모두 target 의 이름(폴더면 그 아래)이어야 한다.
+func (m *Monitor) UpdateRemote(ctx context.Context, serverID, target, kind string, src Source) (*UpdateResult, error) {
 	server, err := m.findServer(serverID)
 	if err != nil {
 		return nil, err
@@ -171,63 +167,21 @@ func (m *Monitor) UpdateRemote(ctx context.Context, serverID, target, kind strin
 	}
 
 	// 같은 대상을 동시에 바꾸지 않는다.
-	key := "update:" + serverID + ":" + target
-	m.mu.Lock()
-	if m.busy[key] {
-		m.mu.Unlock()
-		return nil, &UserError{http.StatusConflict, "이 대상을 업데이트하는 중입니다"}
+	release, err := m.lockTarget(serverID, target, "이 대상을 업데이트하는 중입니다")
+	if err != nil {
+		return nil, err
 	}
-	m.busy[key] = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		delete(m.busy, key)
-		m.mu.Unlock()
-	}()
+	defer release()
 
-	// 받은 tar 를 확인하며 다시 묶어 서버로 흘려보낸다.
-	reader, writer := io.Pipe()
-	result := &UpdateResult{}
-	copied := make(chan error, 1)
-	go func() {
-		err := repackUpdate(body, writer, path.Base(target), kind, size, result)
-		writer.CloseWithError(err)
-		copied <- err
-	}()
-
-	prepareCtx, cancel := context.WithTimeout(ctx, updateTimeout)
-	output, err := m.remote.runReader(prepareCtx, server, scriptWithArgs(updatePrepareScript, target, kind), reader)
-	cancel()
-	// 서버가 먼저 끝났으면(오류) 남은 본문을 기다리지 않도록 파이프를 닫는다.
-	reader.Close()
-	uploadErr := <-copied
-
-	tmp := strings.TrimSuffix(output, "\n")
-	// 브라우저가 끊어도 정리 · 바꾸기는 끝까지 한다.
+	tmp, result, err := m.sendPacked(ctx, server, scriptWithArgs(updatePrepareScript, target, kind), target, kind, "업데이트", src)
+	if err != nil {
+		return nil, err
+	}
+	// 브라우저가 끊어도 바꾸기는 끝까지 한다.
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
 	defer cancel()
-	if uploadErr != nil || err != nil {
-		// 서버 쪽이 끝까지 풀었더라도 올린 내용에 문제가 있으면 임시 폴더를 지운다.
-		m.remote.run(finishCtx, server, scriptWithArgs(updateCleanupScript, target))
-	}
-	var userErr *UserError
-	switch {
-	case errors.As(uploadErr, &userErr):
-		return nil, uploadErr
-	case err != nil:
-		// 서버가 먼저 실패하면 올리던 쪽은 '닫힌 파이프' 로 끝나므로 서버의 이유를 보여준다.
-		return nil, fmt.Errorf("업데이트하지 못했습니다: %w", err)
-	case uploadErr != nil:
-		return nil, fmt.Errorf("올리는 중에 끊겼습니다: %w", uploadErr)
-	}
-
-	// 임시 폴더는 실제 대상 폴더 안의 '.<이름>.update.XXXXXX' 이다.
-	dir, name := path.Dir(tmp), path.Base(target)
-	if !strings.HasPrefix(path.Base(tmp), "."+name+".update.") || checkRemotePath(tmp) != nil {
-		return nil, fmt.Errorf("임시 폴더 경로가 올바르지 않습니다: %q", output)
-	}
-	result.Path = path.Join(dir, name)
-	output, err = m.remote.run(finishCtx, server, scriptWithArgs(updateSwapScript, result.Path, tmp, time.Now().Format("20060102-150405")))
+	result.Path = path.Join(path.Dir(tmp), path.Base(target))
+	output, err := m.remote.run(finishCtx, server, scriptWithArgs(updateSwapScript, result.Path, tmp, time.Now().Format("20060102-150405")))
 	if err != nil {
 		return nil, fmt.Errorf("업데이트하지 못했습니다: %w", err)
 	}
@@ -235,79 +189,20 @@ func (m *Monitor) UpdateRemote(ctx context.Context, serverID, target, kind strin
 	return result, nil
 }
 
-// repackUpdate 는 화면이 올린 tar 를 한 항목씩 확인해 w 에 다시 묶는다.
-//   - 항목은 name(파일) 이거나 name/ 아래(폴더)여야 하고, '..' 나 절대 경로는 안 된다.
-//   - 폴더 · 일반 파일만 받는다. 소유자는 비우고 권한은 정해진 값으로 바꾼다.
-//   - size 를 알면 본문을 끝까지(그 길이만큼) 받았는지 확인한다. (중간에 끊겨 일부만 올라가지 않도록)
-func repackUpdate(body io.Reader, w io.Writer, name, kind string, size int64, result *UpdateResult) error {
-	counter := &countingReader{r: body}
-	in, out := tar.NewReader(counter), tar.NewWriter(w)
-	invalid := func(format string, args ...any) error {
-		return &UserError{http.StatusBadRequest, "올린 내용이 올바르지 않습니다: " + fmt.Sprintf(format, args...)}
+// lockTarget 은 같은 서버 · 경로의 업데이트 · 설치가 동시에 돌지 않게 한다. 이미 진행 중이면 409 다.
+func (m *Monitor) lockTarget(serverID, target, busyMessage string) (func(), error) {
+	key := "update:" + serverID + ":" + target
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.busy[key] {
+		return nil, &UserError{http.StatusConflict, busyMessage}
 	}
-	hasRoot := false
-	for {
-		header, err := in.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		entry := strings.TrimSuffix(header.Name, "/")
-		if entry == "" || path.Clean(entry) != entry || strings.HasPrefix(entry, "/") || entry == ".." || strings.HasPrefix(entry, "../") {
-			return invalid("경로 %q", header.Name)
-		}
-		if entry != name && (kind == UpdateFile || !strings.HasPrefix(entry, name+"/")) {
-			return invalid("%q 는 %q 아래가 아닙니다", header.Name, name)
-		}
-		clean := &tar.Header{Name: entry, ModTime: header.ModTime, Format: tar.FormatPAX}
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if kind == UpdateFile {
-				return invalid("파일 대신 폴더 %q", header.Name)
-			}
-			clean.Typeflag, clean.Mode, clean.Name = tar.TypeDir, updateDirMode, entry+"/"
-		case tar.TypeReg:
-			if kind == UpdateDir && entry == name {
-				return invalid("폴더 대신 파일 %q", header.Name)
-			}
-			clean.Typeflag, clean.Mode, clean.Size = tar.TypeReg, updateFileMode, header.Size
-			result.Files++
-			result.Bytes += header.Size
-		default:
-			return invalid("폴더 · 파일이 아닌 항목 %q", header.Name)
-		}
-		hasRoot = hasRoot || entry == name
-		if err := out.WriteHeader(clean); err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			return err
-		}
-	}
-	if kind == UpdateFile && result.Files != 1 || kind == UpdateDir && !hasRoot {
-		return invalid("%q 이(가) 없습니다", name)
-	}
-	// 끝 표시 뒤에 남은 채움 부분까지 읽어 전체 길이를 맞춰 본다.
-	if _, err := io.Copy(io.Discard, counter); err != nil {
-		return err
-	}
-	if size >= 0 && counter.n != size {
-		return fmt.Errorf("%d 바이트 중 %d 바이트만 받았습니다", size, counter.n)
-	}
-	return out.Close()
-}
-
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
+	m.busy[key] = true
+	return func() {
+		m.mu.Lock()
+		delete(m.busy, key)
+		m.mu.Unlock()
+	}, nil
 }
 
 func (m *Monitor) findServer(serverID string) (Server, error) {

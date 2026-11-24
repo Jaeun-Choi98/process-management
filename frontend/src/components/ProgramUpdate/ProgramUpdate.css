@@ -85,6 +85,21 @@
   white-space: nowrap;
 }
 
+/* 서버 쪽: 프로세스를 누르면 그 시작 파일 폴더로 간다. */
+.program-update-jump {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.program-update-jump > span {
+  margin-right: 4px;
+  color: var(--text-muted);
+}
+
 .program-update-list {
   flex: 1;
   margin: 0;

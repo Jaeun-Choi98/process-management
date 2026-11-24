@@ -2,9 +2,7 @@ package processes
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"regexp"
@@ -55,7 +53,7 @@ if [ -e "$dst" ] || [ -L "$dst" ]; then fail "$dst 이(가) 이미 있습니다.
 [ -w "$p" ] || fail "$p 에 쓰기 권한이 없습니다"
 tmp=$(mktemp -d "$p/.$n.update.XXXXXX") || fail '임시 폴더를 만들지 못했습니다'
 trap 'rm -rf -- "$tmp"' EXIT
-tar --no-same-owner -xf - -C "$tmp" || fail '받은 내용을 풀지 못했습니다'
+tar --no-same-owner -xzf - -C "$tmp" || fail '받은 내용을 풀지 못했습니다'
 new=$tmp/$n
 [ "$(ls -A -- "$tmp")" = "$n" ] && [ -d "$new" ] || fail '받은 내용이 올바르지 않습니다'
 find "$new" -type f -name '*.sh' -exec chmod +x {} + || fail '실행 권한을 주지 못했습니다'
@@ -74,8 +72,8 @@ mv -- "$tmp/${dst##*/}" "$dst" || fail '설치 폴더로 옮기지 못했습니�
 rmdir -- "$tmp"`
 )
 
-// InstallRemote 는 body(tar)를 서버의 req.Target 에 새로 설치하고 프로세스로 등록한다.
-func (m *Monitor) InstallRemote(ctx context.Context, serverID string, req InstallRequest, body io.Reader, size int64) (*InstallResult, error) {
+// InstallRemote 는 src 의 내용을 서버의 req.Target 에 새로 설치하고 프로세스로 등록한다.
+func (m *Monitor) InstallRemote(ctx context.Context, serverID string, req InstallRequest, src Source) (*InstallResult, error) {
 	server, err := m.findServer(serverID)
 	if err != nil {
 		return nil, err
@@ -88,56 +86,20 @@ func (m *Monitor) InstallRemote(ctx context.Context, serverID string, req Instal
 	if _, _, err := m.store.AddProcess(process, true); err != nil {
 		return nil, err
 	}
-
-	key := "update:" + serverID + ":" + req.Target
-	m.mu.Lock()
-	if m.busy[key] {
-		m.mu.Unlock()
-		return nil, &UserError{http.StatusConflict, "이 위치에 설치하는 중입니다"}
+	release, err := m.lockTarget(serverID, req.Target, "이 위치에 설치하는 중입니다")
+	if err != nil {
+		return nil, err
 	}
-	m.busy[key] = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		delete(m.busy, key)
-		m.mu.Unlock()
-	}()
+	defer release()
 
-	name := path.Base(req.Target)
-	reader, writer := io.Pipe()
-	upload := &UpdateResult{}
-	copied := make(chan error, 1)
-	go func() {
-		err := repackUpdate(body, writer, name, UpdateDir, size, upload)
-		writer.CloseWithError(err)
-		copied <- err
-	}()
-
-	prepareCtx, cancel := context.WithTimeout(ctx, updateTimeout)
-	output, err := m.remote.runReader(prepareCtx, server, scriptWithArgs(installPrepareScript, req.Target, req.StartFile), reader)
-	cancel()
-	reader.Close()
-	uploadErr := <-copied
-
-	tmp := strings.TrimSuffix(output, "\n")
+	prepare := scriptWithArgs(installPrepareScript, req.Target, req.StartFile)
+	tmp, sent, err := m.sendPacked(ctx, server, prepare, req.Target, UpdateDir, "설치", src)
+	if err != nil {
+		return nil, err
+	}
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
 	defer cancel()
-	if uploadErr != nil || err != nil {
-		m.remote.run(finishCtx, server, scriptWithArgs(updateCleanupScript, req.Target))
-	}
-	var userErr *UserError
-	switch {
-	case errors.As(uploadErr, &userErr):
-		return nil, uploadErr
-	case err != nil:
-		return nil, fmt.Errorf("설치하지 못했습니다: %w", err)
-	case uploadErr != nil:
-		return nil, fmt.Errorf("올리는 중에 끊겼습니다: %w", uploadErr)
-	}
-	if !strings.HasPrefix(path.Base(tmp), "."+name+".update.") || checkRemotePath(tmp) != nil {
-		return nil, fmt.Errorf("임시 폴더 경로가 올바르지 않습니다: %q", output)
-	}
-	installed := path.Join(path.Dir(tmp), name)
+	installed := path.Join(path.Dir(tmp), path.Base(req.Target))
 	if _, err := m.remote.run(finishCtx, server, scriptWithArgs(installFinishScript, installed, tmp)); err != nil {
 		return nil, fmt.Errorf("설치하지 못했습니다: %w", err)
 	}
@@ -146,7 +108,7 @@ func (m *Monitor) InstallRemote(ctx context.Context, serverID string, req Instal
 	if err != nil {
 		return nil, fmt.Errorf("%s 에 설치했지만 프로세스를 등록하지 못했습니다 (설정에서 추가하세요): %w", installed, err)
 	}
-	return &InstallResult{Path: installed, ProcessID: id, Files: upload.Files, Bytes: upload.Bytes}, nil
+	return &InstallResult{Path: installed, ProcessID: id, Files: sent.Files, Bytes: sent.Bytes}, nil
 }
 
 // installProcess 는 설치 요청을 확인하고 등록할 프로세스를 만든다.

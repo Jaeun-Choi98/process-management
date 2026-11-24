@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import RemoteFilePicker from '../RemoteFilePicker/RemoteFilePicker';
 import { ProcessConfig, ProcessInstance, ServerEntry } from '../../types/config';
-import { uploadApi } from '../../api/client';
+import { requestApi, uploadApi } from '../../api/client';
+import { ARCHIVE_ACCEPT, archiveBaseName, deleteUpload, saveUpload } from '../../api/uploads';
 import { detectStarted, fetchRunning, saveConditionFrom, startProcess } from '../../api/startDetect';
 import { buildTar } from '../../utils/tar';
 import { formatSize } from '../../utils/format';
-import { buildLocalTree, describeLocal, listFiles, LocalNode, tarEntries } from '../../utils/localFiles';
+import { buildLocalTree, describeLocal, listFiles, LocalNode, tarEntries, treeFromUpload } from '../../utils/localFiles';
 import { baseDirOf, conditionFromCommand } from '../../utils/schema';
 import './ProgramInstall.css';
 
@@ -36,19 +37,19 @@ const RELATIVE_PATTERN = /^[A-Za-z0-9._-][A-Za-z0-9._/-]*$/;
 const toInstallName = (name: string) => name.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[.]+/, '') || 'app';
 
 /**
- * 시작 파일 후보 순서: start*.sh → *.sh → 확장자 없는 파일(실행 파일일 수 있음) → 나머지. 같으면 얕은 것 · 이름 순.
- * 점수 2 까지만 처음에 골라 둔다.
+ * 시작 파일 후보 순서: start*.sh → *.sh · (압축 파일에서) 실행 권한이 있는 파일 → 확장자 없는 파일(실행 파일일 수 있음) → 나머지.
+ * 같으면 얕은 것 · 이름 순. 점수 2 까지만 처음에 골라 둔다.
  */
-const startScore = (path: string) => {
+const startScore = (path: string, exec?: boolean) => {
   const name = path.slice(path.lastIndexOf('/') + 1);
-  return /^start.*\.sh$/i.test(name) ? 0 : /\.sh$/i.test(name) ? 1 : !name.includes('.') ? 2 : 3;
+  return /^start.*\.sh$/i.test(name) ? 0 : /\.sh$/i.test(name) || exec ? 1 : !name.includes('.') ? 2 : 3;
 };
 
-/** 폴더 안의 파일을 시작 파일 후보 순서로 */
+/** 폴더 안의 파일을 시작 파일 후보 순서로 (점수와 함께) */
 const startCandidates = (node: LocalNode) =>
   listFiles(node)
-    .map(f => f.path)
-    .sort((a, b) => startScore(a) - startScore(b) || a.split('/').length - b.split('/').length || a.localeCompare(b));
+    .map(f => ({ path: f.path, score: startScore(f.path, f.node.exec) }))
+    .sort((a, b) => a.score - b.score || a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path));
 
 type Step = { kind: 'info' | 'ok' | 'error'; text: string };
 
@@ -59,6 +60,7 @@ type Step = { kind: 'info' | 'ok' | 'error'; text: string };
 const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, onConfigSaved, onClose }) => {
   const serverLabel = server.label || server.id;
   const folderInput = useRef<HTMLInputElement>(null);
+  const archiveInput = useRef<HTMLInputElement>(null);
 
   const [folder, setFolder] = useState<LocalNode | null>(null);
   const [parentDir, setParentDir] = useState(baseDirOf(server));
@@ -70,7 +72,7 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
   const [picking, setPicking] = useState(false);
 
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{ loaded: number; total: number; doneText: string } | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [installed, setInstalled] = useState<InstallResult | null>(null);
   /** 시작한 뒤 하나로 좁히지 못한 새 프로세스 (사용자가 고른다) */
@@ -79,36 +81,72 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
   useEffect(() => {
     folderInput.current?.setAttribute('webkitdirectory', '');
   }, []);
+  /** Esc 로 닫을 때도 최신 close 를 부른다. (올려 둔 압축 파일 정리) */
+  const closeRef = useRef<() => void>(onClose);
 
   useEffect(() => {
-    const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && !busy && !picking && onClose();
+    const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && !busy && !picking && closeRef.current();
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [busy, picking, onClose]);
+  }, [busy, picking]);
 
   /** 시작 파일 후보 (후보 순서대로) */
-  const files = useMemo(() => (folder ? startCandidates(folder) : []), [folder]);
+  const files = useMemo(() => (folder ? startCandidates(folder).map(c => c.path) : []), [folder]);
+
+  /** 설치할 내용(폴더 또는 압축 파일)을 정하고 이름 · 시작 파일을 미리 채운다. 전에 올려 둔 압축 파일은 지운다. */
+  const chooseSource = (node: LocalNode, displayName: string) => {
+    if (folder?.upload && folder.upload.id !== node.upload?.id) void deleteUpload(folder.upload.id);
+    const first = startCandidates(node).find(c => c.score <= 2 && RELATIVE_PATTERN.test(c.path))?.path ?? '';
+    setFolder(node);
+    setName(toInstallName(displayName));
+    setLabel(displayName);
+    setStartFile(first);
+    setStartAfter(first !== '');
+    setInstalled(null);
+    setCandidates(null);
+  };
 
   const openFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? []);
     e.target.value = '';
     if (picked.length === 0) return;
     const folderName = picked[0].webkitRelativePath.split('/')[0];
-    const node = buildLocalTree(picked, folderName).children[0];
-    const first = startCandidates(node).find(path => startScore(path) <= 2 && RELATIVE_PATTERN.test(path)) ?? '';
-    setFolder(node);
-    setName(toInstallName(folderName));
-    setLabel(folderName);
-    setStartFile(first);
-    setStartAfter(first !== '');
     setSteps([]);
-    setInstalled(null);
-    setCandidates(null);
+    chooseSource(buildLocalTree(picked, folderName).children[0], folderName);
   };
+
+  /** 압축 파일은 바로 Go 서버에 올려 두고(목록 확인) 설치할 때 그것을 쓴다. */
+  const openArchive = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    setSteps([]);
+    setProgress({ loaded: 0, total: file.size, doneText: '다 올렸습니다. 압축 파일 목록을 읽는 중...' });
+    try {
+      const upload = await saveUpload(file, (loaded, total) => setProgress({ loaded, total, doneText: '다 올렸습니다. 압축 파일 목록을 읽는 중...' }));
+      const displayName = upload.root || archiveBaseName(file.name);
+      chooseSource(treeFromUpload(upload, displayName), displayName);
+      log({ kind: 'info', text: `${file.name} 을(를) 올려 두었습니다. (${upload.root ? `맨 위 폴더 ${upload.root}/ 는 벗겨서 설치합니다. ` : ''}1시간 안에 설치하세요)` });
+    } catch (err) {
+      log({ kind: 'error', text: `압축 파일을 올리지 못했습니다: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setProgress(null);
+      setBusy(false);
+    }
+  };
+
+  /** 닫을 때 설치하지 않은 압축 파일은 Go 서버에서 지운다. */
+  const close = () => {
+    if (folder?.upload && !installed) void deleteUpload(folder.upload.id);
+    onClose();
+  };
+
+  closeRef.current = close;
 
   const target = `${parentDir.replace(/\/+$/, '')}/${name}`;
   const problem = !folder
-    ? '설치할 폴더를 여세요'
+    ? '설치할 폴더나 압축 파일을 여세요'
     : !NAME_PATTERN.test(name)
       ? '설치 폴더 이름은 영문 · 숫자 · . _ - 로 적어야 합니다'
       : startFile && !RELATIVE_PATTERN.test(startFile)
@@ -136,18 +174,28 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
       return;
     }
     setBusy(true);
-    setSteps([]);
     setCandidates(null);
     try {
-      const body = buildTar(tarEntries(folder, name));
-      setProgress({ loaded: 0, total: body.size });
-      const query = new URLSearchParams({ path: target, start: startFile, label: label.trim() });
-      const result = await uploadApi<InstallResult>(
-        `${SERVERS_API}/${encodeURIComponent(server.id)}/install?${query}`,
-        body,
-        'application/x-tar',
-        (loaded, total) => setProgress({ loaded, total })
-      );
+      let result: InstallResult;
+      if (folder.upload) {
+        // 압축 파일: 이미 Go 서버에 있으므로 풀어서 서버로 보내기만 한다.
+        log({ kind: 'info', text: '압축을 풀어 서버로 보내는 중...' });
+        result = await requestApi<InstallResult>(`${SERVERS_API}/${encodeURIComponent(server.id)}/install-upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ upload: folder.upload.id, path: target, start: startFile, label: label.trim() }),
+        });
+      } else {
+        const body = buildTar(tarEntries(folder, name));
+        setProgress({ loaded: 0, total: body.size, doneText: '다 올렸습니다. 서버에서 설치하는 중...' });
+        const query = new URLSearchParams({ path: target, start: startFile, label: label.trim() });
+        result = await uploadApi<InstallResult>(
+          `${SERVERS_API}/${encodeURIComponent(server.id)}/install?${query}`,
+          body,
+          'application/x-tar',
+          (loaded, total) => setProgress({ loaded, total, doneText: '다 올렸습니다. 서버에서 설치하는 중...' })
+        );
+      }
       setProgress(null);
       setInstalled(result);
       log({ kind: 'ok', text: `설치했습니다: ${result.path} (파일 ${result.files.toLocaleString()}개, ${formatSize(result.bytes)}) · 프로세스 '${result.processId}' 등록` });
@@ -197,7 +245,7 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
   const locked = busy || installed !== null;
 
   return (
-    <div className="program-install-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && !picking && onClose()}>
+    <div className="program-install-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && !picking && close()}>
       <div className="program-install" role="dialog" aria-modal="true" aria-label="프로그램 설치">
         <header className="program-install-header">
           <div>
@@ -207,26 +255,31 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
               {server.user}@{server.host}
             </span>
           </div>
-          <button className="btn-icon" onClick={onClose} disabled={busy} title="닫기 (Esc)">
+          <button className="btn-icon" onClick={close} disabled={busy} title="닫기 (Esc)">
             <Icon name="close" />
           </button>
         </header>
 
         <div className="program-install-body">
           <section>
-            <h3>1. 내 PC 의 프로그램 폴더</h3>
+            <h3>1. 내 PC 의 프로그램 (폴더 또는 압축 파일)</h3>
             <div className="program-install-row">
               <button className="btn btn-secondary" onClick={() => folderInput.current?.click()} disabled={locked}>
                 <Icon name="folder" />
                 폴더 열기
               </button>
+              <button className="btn btn-secondary" onClick={() => archiveInput.current?.click()} disabled={locked}>
+                <Icon name="file" />
+                압축 파일 열기
+              </button>
               <input ref={folderInput} type="file" hidden onChange={openFolder} />
+              <input ref={archiveInput} type="file" accept={ARCHIVE_ACCEPT} hidden onChange={openArchive} />
               {folder ? (
                 <code>
-                  {folder.name} ({describeLocal(folder)})
+                  {folder.upload ? folder.upload.name : folder.name} ({describeLocal(folder)})
                 </code>
               ) : (
-                <small>브라우저가 '업로드할까요?' 를 물으면 허용하세요. (설치를 누르기 전에는 보내지 않습니다)</small>
+                <small>폴더: 브라우저가 '업로드할까요?' 를 물으면 허용하세요. 압축 파일(zip · tar.gz · tgz · tar)은 열면 바로 올려 목록을 확인합니다.</small>
               )}
             </div>
           </section>
@@ -283,7 +336,7 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
                   <progress value={progress.loaded} max={progress.total || 1} />
                   <span>
                     {progress.loaded >= progress.total
-                      ? '다 올렸습니다. 서버에서 설치하는 중...'
+                      ? progress.doneText
                       : `올리는 중 ${formatSize(progress.loaded)} / ${formatSize(progress.total)} (${percent}%)`}
                   </span>
                 </div>
@@ -310,7 +363,7 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
 
         <footer className="program-install-footer">
           {problem && !installed && <span className="program-install-problem">{problem}</span>}
-          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
+          <button className="btn btn-secondary" onClick={close} disabled={busy}>
             닫기
           </button>
           <button className="btn btn-primary" onClick={install} disabled={problem !== null || locked}>

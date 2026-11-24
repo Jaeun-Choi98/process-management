@@ -30,6 +30,10 @@ type Configuration struct {
 	// 접속한 서버의 SSH 호스트 키 기록 ( 처음 접속할 때 기록, 이후 다르면 접속 거부 )
 	KnownHostsFile string
 
+	// 설치 · 업데이트용 압축 파일을 잠시 받아 두는 폴더와 최대 크기(바이트)
+	UploadDir      string
+	UploadMaxBytes int64
+
 	// log
 	LogLevel string
 
@@ -55,6 +59,8 @@ func NewConfiguration() (*Configuration, error) {
 
 		ProcessesFile:  cfgFile.Section("PROCESSES").Key("FILE").MustString("./data/processes.json"),
 		KnownHostsFile: cfgFile.Section("PROCESSES").Key("KNOWN_HOSTS").MustString("./data/known_hosts"),
+		UploadDir:      cfgFile.Section("UPLOAD").Key("DIR").MustString("./data/upload"),
+		UploadMaxBytes: cfgFile.Section("UPLOAD").Key("MAX_MB").MustInt64(4096) << 20,
 		LogLevel:       cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
 
 		DeployMode: cfgFile.Section("DEPLOY_SATE").Key("MODE").MustInt(TEST),

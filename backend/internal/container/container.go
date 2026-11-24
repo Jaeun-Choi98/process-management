@@ -27,7 +27,10 @@ func NewContainer(cfg *config.Configuration) {
 	// 자동 재시작을 켠 프로세스를 감시한다. ( 서버 종료 시 RestServer.Shutdown 에서 멈춘다 )
 	monitor.StartWatchdog()
 
-	n.restServer = rest.New(cfg, controller.NewController(store, monitor), monitor)
+	// 설치 · 업데이트용 압축 파일 임시 보관 ( 전에 남은 파일은 지운다 )
+	uploads := processes.NewUploads(cfg.UploadDir, cfg.UploadMaxBytes)
+
+	n.restServer = rest.New(cfg, controller.NewController(store, monitor, uploads), monitor)
 
 	myContainer = n
 }

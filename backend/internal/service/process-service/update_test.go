@@ -106,7 +106,7 @@ func TestUpdateOverSSH(t *testing.T) {
 	update := func(target, kind string, data []byte, size int64) (*UpdateResult, error) {
 		t.Helper()
 		defer leftovers()
-		return monitor.UpdateRemote(ctx, "local", target, kind, bytes.NewReader(data), size)
+		return monitor.UpdateRemote(ctx, "local", target, kind, BrowserTar(bytes.NewReader(data), size))
 	}
 	read := func(name string) string {
 		data, _ := os.ReadFile(name)

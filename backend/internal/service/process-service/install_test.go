@@ -40,7 +40,7 @@ func TestInstallOverSSH(t *testing.T) {
 	install := func(req InstallRequest, data []byte) (*InstallResult, error) {
 		t.Helper()
 		defer leftovers()
-		return monitor.InstallRemote(ctx, "local", req, bytes.NewReader(data), int64(len(data)))
+		return monitor.InstallRemote(ctx, "local", req, BrowserTar(bytes.NewReader(data), int64(len(data))))
 	}
 	pkg := func(name string) []byte {
 		return buildTar(t,

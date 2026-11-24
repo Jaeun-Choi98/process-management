@@ -1,5 +1,6 @@
 import { formatSize } from './format';
 import { TarEntry } from './tar';
+import { UploadInfo } from '../types/config';
 
 /** 폴더 · 파일 */
 export type Kind = 'dir' | 'file';
@@ -12,6 +13,10 @@ export interface LocalNode {
   children: LocalNode[];
   files: number;
   bytes: number;
+  /** 압축 파일 안의 실행 권한이 있는 파일 */
+  exec?: boolean;
+  /** 압축 파일을 연 경우 그 압축 파일 (맨 위 항목에만) */
+  upload?: UploadInfo;
 }
 
 const newDir = (name: string): LocalNode => ({ name, kind: 'dir', children: [], files: 0, bytes: 0 });
@@ -66,3 +71,50 @@ export const listFiles = (node: LocalNode, prefix = ''): { path: string; node: L
   node.children.flatMap(child =>
     child.kind === 'file' ? [{ path: prefix + child.name, node: child }] : listFiles(child, `${prefix}${child.name}/`)
   );
+
+/**
+ * Go 서버에 받아 둔 압축 파일의 목록으로 트리를 만든다. 맨 위 항목(name)이 압축 파일 전체(폴더)다.
+ * 링크는 파일처럼 보여준다. 압축 파일 안에 폴더 항목이 따로 없어도 경로로 폴더를 만든다.
+ */
+export const treeFromUpload = (upload: UploadInfo, name: string): LocalNode => {
+  const root: LocalNode = { ...newDir(name), upload };
+  const dirs = new Map<string, LocalNode>([['', root]]);
+  const dirOf = (path: string): LocalNode => {
+    const existing = dirs.get(path);
+    if (existing) return existing;
+    const slash = path.lastIndexOf('/');
+    const node = newDir(path.slice(slash + 1));
+    dirOf(slash < 0 ? '' : path.slice(0, slash)).children.push(node);
+    dirs.set(path, node);
+    return node;
+  };
+  for (const entry of upload.entries) {
+    if (entry.type === 'dir') {
+      dirOf(entry.path);
+      continue;
+    }
+    const slash = entry.path.lastIndexOf('/');
+    const parentPath = slash < 0 ? '' : entry.path.slice(0, slash);
+    dirOf(parentPath).children.push({
+      name: entry.path.slice(slash + 1),
+      kind: 'file',
+      children: [],
+      files: 1,
+      bytes: entry.size ?? 0,
+      exec: entry.exec,
+    });
+    // 위 폴더들의 파일 수 · 크기에 더한다.
+    for (let path = parentPath; ; path = path.slice(0, Math.max(path.lastIndexOf('/'), 0))) {
+      const dir = dirs.get(path)!;
+      dir.files += 1;
+      dir.bytes += entry.size ?? 0;
+      if (path === '') break;
+    }
+  }
+  const sort = (node: LocalNode) => {
+    node.children.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1));
+    node.children.forEach(sort);
+  };
+  sort(root);
+  return root;
+};
