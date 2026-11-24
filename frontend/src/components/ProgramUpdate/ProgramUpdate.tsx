@@ -59,6 +59,8 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   /** 내 PC 쪽: 뿌리부터 지금 폴더까지 */
   const [localPath, setLocalPath] = useState<LocalNode[]>([]);
   const [localSelected, setLocalSelected] = useState<LocalNode | null>(null);
+  /** 압축 파일 안에서 고른 기준 폴더 (맨 위 폴더를 벗긴 경로, 압축 파일 전체면 '') */
+  const [archiveSub, setArchiveSub] = useState('');
   const folderInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
@@ -148,6 +150,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     if (archive && archive.id !== root.children[0]?.upload?.id) void deleteUpload(archive.id);
     setLocalPath([root]);
     setLocalSelected(root.children[0] ?? null);
+    setArchiveSub('');
     setResult(null);
   };
 
@@ -219,6 +222,23 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   };
 
   const localDir = localPath[localPath.length - 1];
+
+  /**
+   * 내 PC 쪽 항목을 고른다. 압축 파일은 통째로, 또는 그 안의 폴더를 기준으로만 쓴다. (파일은 고를 수 없다)
+   * 안쪽 폴더를 고르면 그 폴더의 내용만 올린다. (예: app.zip 안이 app/app/start.sh 처럼 한 단계 더 감싸져 있을 때)
+   */
+  const selectLocal = (node: LocalNode) => {
+    if (!archive) {
+      setLocalSelected(node);
+      return;
+    }
+    if (node.kind !== 'dir') return;
+    // localPath: [가상 뿌리, 압축 파일, 그 안의 폴더 ...]
+    setArchiveSub(node.upload ? '' : [...localPath.slice(2).map(n => n.name), node.name].join('/'));
+    setLocalSelected(node);
+  };
+  /** 요약 · 확인 문구에 쓸 내 PC 쪽 이름 */
+  const localLabel = localSelected ? (archive ? `${archive.name}${archiveSub ? ` 안의 ${archiveSub}/` : ''}` : localSelected.name) : '';
   const remoteSelectedKind = remoteSelected ? remoteKind(remoteSelected) : null;
   const mismatch = remoteSelectedKind !== null && localSelected !== null && remoteSelectedKind !== localSelected.kind;
   const ready = remoteSelectedKind !== null && localSelected !== null && !mismatch && !busy;
@@ -231,7 +251,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     if (
       !window.confirm(
         `${serverLabel} 의 ${kindText}\n${remoteSelected.path}\n\n` +
-          `내 PC 의 '${localSelected.name}' (${describeLocal(localSelected)}) 로 바꿀까요?\n` +
+          `내 PC 의 '${localLabel}' (${describeLocal(localSelected)}) 로 바꿀까요?\n` +
           `기존 ${kindText}은(는) ${name}.bak.<날짜-시각> 으로 이름을 바꿔 남깁니다.` +
           (localSelected.name !== name ? `\n올라간 ${kindText}의 이름은 서버 쪽 이름(${name})을 따릅니다.` : '') +
           (restartTargets.length > 0
@@ -247,13 +267,13 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     setRestartResults([]);
     try {
       let updated: UpdateResult;
-      if (localSelected.upload) {
+      if (archive) {
         // 압축 파일: 이미 Go 서버에 있으므로 풀어서 서버로 보내기만 한다. (폴더로만 바꿀 수 있다)
         setProgress({ loaded: 1, total: 1, doneText: '압축을 풀어 서버로 보내고 바꾸는 중...' });
         updated = await requestApi<UpdateResult>(`${base}/update-upload`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ upload: localSelected.upload.id, path: remoteSelected.path }),
+          body: JSON.stringify({ upload: archive.id, path: remoteSelected.path, sub: archiveSub }),
         });
       } else {
         const body = buildTar(tarEntries(localSelected, name));
@@ -421,8 +441,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                     node.kind,
                     node.name,
                     localSelected === node,
-                    // 압축 파일은 통째로만 쓴다. 안의 항목은 둘러보기만 한다.
-                    () => (archive && !node.upload ? undefined : setLocalSelected(node)),
+                    () => selectLocal(node),
                     node.kind === 'dir' ? () => setLocalPath(path => [...path, node]) : null,
                     node.kind === 'file' && node.file
                       ? `${formatSize(node.bytes)} · ${formatDateTime(node.file.lastModified)}`
@@ -431,7 +450,11 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 )}
               </ul>
             )}
-            <small className="program-update-hint">빈 폴더는 올라가지 않습니다. 두 번 누르면 폴더를 엽니다.</small>
+            <small className="program-update-hint">
+              {archive
+                ? '압축 파일 안의 폴더를 누르면 그 폴더를 기준으로 올립니다. (안이 app/app/... 처럼 한 번 더 감싸져 있을 때) 두 번 누르면 폴더를 엽니다.'
+                : '빈 폴더는 올라가지 않습니다. 두 번 누르면 폴더를 엽니다.'}
+            </small>
           </section>
         </div>
 
@@ -451,7 +474,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
               <span>내 PC</span>
               {localSelected ? (
                 <code>
-                  {localSelected.name} ({KIND_TEXT[localSelected.kind]}, {describeLocal(localSelected)})
+                  {localLabel} ({KIND_TEXT[localSelected.kind]}, {describeLocal(localSelected)})
                 </code>
               ) : (
                 <em>올릴 폴더 · 파일을 고르세요</em>

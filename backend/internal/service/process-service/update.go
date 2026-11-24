@@ -97,7 +97,9 @@ printf '%s\n' "$tmp"`
 new=$tmp/${dst##*/}
 bak=$dst.bak.$ts
 fail() { rm -rf -- "$tmp"; echo "$1" >&2; exit 1; }
-[ -e "$bak" ] || [ -L "$bak" ] && fail "$bak 이(가) 이미 있습니다"
+# 같은 초에 두 번 업데이트하면 뒤에 번호를 붙인다. (.bak.<시각>-1, -2 ...)
+i=1
+while [ -e "$bak" ] || [ -L "$bak" ]; do bak=$dst.bak.$ts-$i; i=$((i+1)); done
 mv -- "$dst" "$bak" || fail '기존 대상의 이름을 바꾸지 못했습니다'
 if ! mv -- "$new" "$dst"; then
   mv -- "$bak" "$dst"

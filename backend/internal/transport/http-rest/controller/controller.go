@@ -430,7 +430,12 @@ func handleInstallUpload(monitor *processes.Monitor, uploads *processes.Uploads)
 		id := c.Param("id")
 		logger.Warnf("[REST] program install requested: %s %s from %s (start %s), remote: %s", id, body.Path, upload.Name, body.Start, c.ClientIP())
 		req := processes.InstallRequest{Target: body.Path, StartFile: body.Start, Label: body.Label}
-		result, err := monitor.InstallRemote(c.Request.Context(), id, req, upload.Source())
+		src, err := upload.Source("")
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		result, err := monitor.InstallRemote(c.Request.Context(), id, req, src)
 		if err != nil {
 			logger.Warnf("[REST] program install failed: %s %s, err: %v", id, body.Path, err)
 			respondError(c, err)
@@ -442,7 +447,7 @@ func handleInstallUpload(monitor *processes.Monitor, uploads *processes.Uploads)
 	}
 }
 
-// POST /api/servers/:id/update-upload {"upload": "...", "path": "/home/ops/myapp"} : 받아 둔 압축 파일로 서버의 폴더를 바꾼다.
+// POST /api/servers/:id/update-upload {"upload": "...", "path": "/home/ops/myapp", "sub": "app"} : 받아 둔 압축 파일(sub 를 주면 그 안의 폴더)로 서버의 폴더를 바꾼다.
 func handleUpdateUpload(monitor *processes.Monitor, uploads *processes.Uploads) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body request.UpdateUpload
@@ -456,8 +461,13 @@ func handleUpdateUpload(monitor *processes.Monitor, uploads *processes.Uploads) 
 			return
 		}
 		id := c.Param("id")
-		logger.Warnf("[REST] program update requested: %s %s from %s, remote: %s", id, body.Path, upload.Name, c.ClientIP())
-		result, err := monitor.UpdateRemote(c.Request.Context(), id, body.Path, processes.UpdateDir, upload.Source())
+		src, err := upload.Source(body.Sub)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		logger.Warnf("[REST] program update requested: %s %s from %s/%s, remote: %s", id, body.Path, upload.Name, body.Sub, c.ClientIP())
+		result, err := monitor.UpdateRemote(c.Request.Context(), id, body.Path, processes.UpdateDir, src)
 		if err != nil {
 			logger.Warnf("[REST] program update failed: %s %s, err: %v", id, body.Path, err)
 			respondError(c, err)

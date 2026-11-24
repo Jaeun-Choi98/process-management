@@ -177,7 +177,8 @@ func TestInstallAndUpdateFromArchiveOverSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := filepath.Join(home, "myapp")
-	result, err := monitor.InstallRemote(ctx, "local", InstallRequest{Target: app, StartFile: "bin/server"}, up.Source())
+	src, _ := up.Source("")
+	result, err := monitor.InstallRemote(ctx, "local", InstallRequest{Target: app, StartFile: "bin/server"}, src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +203,8 @@ func TestInstallAndUpdateFromArchiveOverSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := monitor.UpdateRemote(ctx, "local", app, UpdateDir, up.Source())
+	src, _ = up.Source("")
+	updated, err := monitor.UpdateRemote(ctx, "local", app, UpdateDir, src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,8 +216,40 @@ func TestInstallAndUpdateFromArchiveOverSSH(t *testing.T) {
 	}
 	// 압축 파일로 파일 하나를 바꿀 수는 없다.
 	os.WriteFile(filepath.Join(home, "one.jar"), []byte("x"), 0o644)
-	if _, err := monitor.UpdateRemote(ctx, "local", filepath.Join(home, "one.jar"), UpdateFile, up.Source()); !isStatus(err, http.StatusBadRequest) {
+	if _, err := monitor.UpdateRemote(ctx, "local", filepath.Join(home, "one.jar"), UpdateFile, src); !isStatus(err, http.StatusBadRequest) {
 		t.Errorf("archive onto file: %v", err)
+	}
+
+	// 한 단계 더 감싼 압축 파일(app/app/...): 안쪽 app 폴더를 기준으로 올린다.
+	up, err = uploads.Save("app.zip", bytes.NewReader(makeZip(t,
+		archiveItem{name: "app/app/start.sh", content: "v3"},
+		archiveItem{name: "app/app/conf/a.ini", content: "[a]"},
+		archiveItem{name: "app/README", content: "outside"},
+	)))
+	if err != nil || up.Root != "app" {
+		t.Fatalf("nested = %+v, %v", up, err)
+	}
+	if _, err := up.Source("nope"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("missing sub: %v", err)
+	}
+	if _, err := up.Source("../x"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("bad sub: %v", err)
+	}
+	src, err = up.Source("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := monitor.UpdateRemote(ctx, "local", app, UpdateDir, src); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(app, "start.sh")); string(data) != "v3" {
+		t.Errorf("start.sh = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(app, "README")); !os.IsNotExist(err) {
+		t.Error("files outside the chosen folder must not be sent")
+	}
+	if _, err := os.Stat(filepath.Join(app, "conf", "a.ini")); err != nil {
+		t.Error("nested files missing")
 	}
 	if matches, _ := filepath.Glob(filepath.Join(home, ".*.update.*")); len(matches) > 0 {
 		t.Errorf("temporary folders left: %v", matches)

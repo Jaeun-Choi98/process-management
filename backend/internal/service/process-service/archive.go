@@ -361,7 +361,20 @@ func (up *Upload) relative(name string) string {
 }
 
 // Source 는 압축을 풀며 항목을 설치 · 업데이트 폴더 이름(name) 아래로 옮겨 보낸다. 압축 파일은 폴더로만 쓴다.
-func (up *Upload) Source() Source {
+// sub 를 주면 압축 파일 안의 그 폴더(맨 위 폴더를 벗긴 경로, 예: app)를 기준으로 그 아래만 보낸다.
+// (압축 파일이 app/app/start.sh 처럼 한 단계 더 감싸져 있을 때)
+func (up *Upload) Source(sub string) (Source, error) {
+	if sub != "" {
+		clean, ok := cleanEntry(sub)
+		found := false
+		for _, e := range up.Entries {
+			found = found || strings.HasPrefix(e.Path, clean+"/")
+		}
+		if !ok || !found {
+			return nil, &UserError{http.StatusBadRequest, fmt.Sprintf("압축 파일 안에 %s 폴더가 없습니다", sub)}
+		}
+		sub = clean
+	}
 	return func(p *packer) error {
 		if p.kind != UpdateDir {
 			return &UserError{http.StatusBadRequest, "압축 파일은 폴더로만 바꿀 수 있습니다"}
@@ -375,10 +388,16 @@ func (up *Upload) Source() Source {
 				return invalidContent("경로 %q", entry.name)
 			}
 			rel := up.relative(name)
+			if sub != "" {
+				if !strings.HasPrefix(rel, sub+"/") {
+					return nil // 고른 폴더 밖 (고른 폴더 자체 포함)
+				}
+				rel = strings.TrimPrefix(rel, sub+"/")
+			}
 			if skipEntry(name) || rel == "" {
 				return nil
 			}
 			return p.add(p.name+"/"+rel, entry.typ, entry.size, entry.exec, entry.link, entry.modified, content)
 		})
-	}
+	}, nil
 }

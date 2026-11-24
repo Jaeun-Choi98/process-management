@@ -17,4 +17,6 @@ type UpdateUpload struct {
 	Upload string `json:"upload" binding:"required"`
 	// 바꿀 폴더 ( 절대 경로 )
 	Path string `json:"path" binding:"required"`
+	// 압축 파일 안의 기준 폴더 ( 맨 위 폴더를 벗긴 경로, 예: app. 비우면 압축 파일 전체 )
+	Sub string `json:"sub"`
 }
