@@ -43,6 +43,15 @@ func (r *remote) run(ctx context.Context, server Server, command string) (string
 
 // runInput 은 input 을 명령의 표준 입력으로 보낸다. (nil 이면 보내지 않는다)
 func (r *remote) runInput(ctx context.Context, server Server, command string, input []byte) (string, error) {
+	var stdin io.Reader
+	if input != nil {
+		stdin = bytes.NewReader(input)
+	}
+	return r.runReader(ctx, server, command, stdin)
+}
+
+// runReader 는 input 을 메모리에 모으지 않고 명령의 표준 입력으로 흘려보낸다. (큰 파일 올리기, nil 이면 보내지 않는다)
+func (r *remote) runReader(ctx context.Context, server Server, command string, input io.Reader) (string, error) {
 	var stdout bytes.Buffer
 	if err := r.exec(ctx, server, command, input, &stdout); err != nil {
 		return "", err
@@ -58,7 +67,7 @@ func (r *remote) stream(ctx context.Context, server Server, command string, w io
 
 // exec 는 server 에서 command 를 실행하고 표준 출력을 stdout 에 쓴다.
 // 종료 코드가 0 이 아니면 표준 에러 내용(없으면 표준 출력, 버퍼일 때만)을 담은 에러를 돌려준다.
-func (r *remote) exec(ctx context.Context, server Server, command string, input []byte, stdout io.Writer) error {
+func (r *remote) exec(ctx context.Context, server Server, command string, input io.Reader, stdout io.Writer) error {
 	key := fmt.Sprintf("%s@%s|%x", server.User, server.addr(), sha256.Sum256([]byte(server.Password)))
 
 	var session *ssh.Session
@@ -83,7 +92,7 @@ func (r *remote) exec(ctx context.Context, server Server, command string, input 
 	session.Stdout = stdout
 	session.Stderr = &stderr
 	if input != nil {
-		session.Stdin = bytes.NewReader(input)
+		session.Stdin = input
 	}
 
 	done := make(chan error, 1)

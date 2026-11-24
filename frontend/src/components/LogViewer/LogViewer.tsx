@@ -5,6 +5,7 @@ import { requestApi } from '../../api/client';
 import IniEditor from '../IniEditor/IniEditor';
 import { effectivePatterns } from '../../utils/schema';
 import './LogViewer.css';
+import { formatSize } from '../../utils/format';
 
 /** log: 로그 파일 패턴(logFiles), 파일은 tail 로 보기 / ini: INI 파일 패턴(iniFiles), 파일은 편집 */
 export type FileRoot = 'log' | 'ini';
@@ -21,15 +22,6 @@ const AUTO_REFRESH_MS = 3000;
 
 /** 아래에서 process 를 프로세스 항목 이름으로 쓰므로 환경 변수는 여기서 읽어 둔다. */
 const PROCESSES_API = `${process.env.PUBLIC_URL}/api/processes`;
-
-const formatSize = (size: number) =>
-  size < 1024
-    ? `${size} B`
-    : size < 1024 ** 2
-      ? `${(size / 1024).toFixed(1)} KB`
-      : size < 1024 ** 3
-        ? `${(size / 1024 ** 2).toFixed(1)} MB`
-        : `${(size / 1024 ** 3).toFixed(2)} GB`;
 
 /** "/opt/app/logs/app.log" → ["/opt/app/logs/", "app.log"] (목록에서 파일 이름만 굵게 보여주려고) */
 const splitPath = (path: string) => {

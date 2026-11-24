@@ -131,6 +131,36 @@ export interface FileEntry {
   target?: string;
 }
 
+/** GET /api/servers/:id/browse 응답: 서버의 폴더 하나 (프로그램 업데이트) */
+export interface RemoteDir {
+  /** SSH 계정의 홈 폴더 (실제 경로). 이 위로는 올라갈 수 없다. */
+  home: string;
+  /** 지금 폴더 (실제 경로) */
+  path: string;
+  /** 폴더 먼저, 이름 순. 심볼릭 링크는 가리키는 대상의 종류(dir · file)로 온다. */
+  entries: RemoteEntry[];
+}
+
+export interface RemoteEntry {
+  /** 절대 경로 */
+  path: string;
+  /** link 는 가리키는 대상이 없는 링크, other 는 장치 파일 등 */
+  type: 'dir' | 'file' | 'link' | 'other';
+  size: number;
+  /** ls 가 보여주는 수정 시각 ("Nov 19 11:15") */
+  modified: string;
+}
+
+/** POST /api/servers/:id/update 응답 */
+export interface UpdateResult {
+  /** 바뀐 대상 */
+  path: string;
+  /** 이전 내용을 옮겨 둔 경로 (<대상>.bak.YYYYMMDD-HHmmss) */
+  backup: string;
+  files: number;
+  bytes: number;
+}
+
 export interface ProcessInstance {
   pid: number;
   cpu: number;

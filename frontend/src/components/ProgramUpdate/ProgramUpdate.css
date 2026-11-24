@@ -1,0 +1,210 @@
+.program-update-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--overlay);
+}
+
+.program-update {
+  display: flex;
+  flex-direction: column;
+  width: min(1200px, 100%);
+  height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.program-update-header,
+.program-update-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.program-update-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.program-update-header div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.program-update-header span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* 왼쪽 서버, 오른쪽 내 PC. 좁은 화면에서는 위아래로 */
+.program-update-panes {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 1fr 1fr;
+  min-height: 0;
+}
+
+.program-update-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  font-size: 0.8rem;
+}
+
+.program-update-pane + .program-update-pane {
+  border-left: 1px solid var(--border);
+}
+
+.program-update-pane-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.program-update-pane-title code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-update-list {
+  flex: 1;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.program-update-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 16px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.program-update-row:hover:not(:disabled) { background: var(--surface-2); }
+.program-update-row:disabled { cursor: not-allowed; }
+
+.program-update-row-selected,
+.program-update-row-selected:hover:not(:disabled) {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.program-update-row-selected .program-update-meta { color: inherit; opacity: 0.75; }
+
+.program-update-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-update-meta {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.program-update-muted { color: var(--text-muted); }
+
+.program-update-placeholder {
+  padding: 12px 16px;
+  color: var(--text-muted);
+}
+
+.program-update-hint {
+  margin-top: auto;
+  padding: 8px 16px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-soft);
+}
+
+.program-update-footer {
+  align-items: flex-end;
+  border-top: 1px solid var(--border);
+}
+
+.program-update-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+
+.program-update-summary > div {
+  overflow-wrap: anywhere;
+}
+
+.program-update-summary span {
+  display: inline-block;
+  width: 4em;
+  color: var(--text-muted);
+}
+
+.program-update-summary code { font-family: var(--font-mono); }
+.program-update-summary em { font-style: normal; color: var(--text-muted); }
+
+.program-update-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.program-update-warn { color: var(--warning); }
+
+.program-update-ok,
+.program-update-error {
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  border-radius: var(--radius);
+}
+
+.program-update-ok {
+  color: var(--success);
+  background: var(--success-bg);
+}
+
+.program-update-error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.program-update-pane > .program-update-error { margin: 8px 16px 0; }
+
+@media (max-width: 800px) {
+  .program-update-panes { grid-template-columns: 1fr; }
+  .program-update-pane + .program-update-pane {
+    border-top: 1px solid var(--border);
+    border-left: none;
+  }
+  .program-update-footer { flex-direction: column; align-items: stretch; }
+}

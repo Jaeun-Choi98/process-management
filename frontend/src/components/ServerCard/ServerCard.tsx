@@ -19,11 +19,12 @@ interface ServerCardProps {
   state: ServerState;
   /** 로그 · INI 파일 목록 창을 연다. */
   onOpenFiles: (process: ProcessEntry, root: FileRoot) => void;
-  /** 자동 재시작 · 감시 조건 창을 연다. */
   /** 실행 판단 조건 · 자동 재시작 창을 연다. */
   onEditWatch: (process: ProcessEntry, status: ProcessStatus | undefined) => void;
   /** 시작 · 중지가 끝나면 호출한다. (상태 새로고침) */
   onActionDone: () => void;
+  /** 프로그램 업데이트 창을 연다. */
+  onUpdateProgram: () => void;
 }
 
 /** 아래에서 process 를 프로세스 항목 이름으로 쓰므로 환경 변수는 여기서 읽어 둔다. */
@@ -49,7 +50,7 @@ const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined,
 };
 
 /** 서버 하나의 SSH 접속 상태와, 그 서버에서 확인한 프로세스별 실행 상태 · 로그 · 시작/중지 버튼 */
-const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onOpenFiles, onEditWatch, onActionDone }) => {
+const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onOpenFiles, onEditWatch, onActionDone, onUpdateProgram }) => {
   /** 프로세스 id → 진행 중인 동작 */
   const [busy, setBusy] = useState<Record<string, Action>>({});
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
@@ -91,6 +92,9 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
         <span className="server-card-summary">
           {status && !status.error && `실행 ${runningCount}/${checked.length}`}
         </span>
+        <button className="btn-text" onClick={onUpdateProgram} title="서버의 폴더 · 파일을 내 PC 의 것으로 바꿉니다">
+          프로그램 업데이트
+        </button>
       </header>
 
       {status?.error && <div className="server-card-error">{status.error}</div>}

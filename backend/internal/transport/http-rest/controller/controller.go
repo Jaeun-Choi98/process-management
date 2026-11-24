@@ -51,6 +51,10 @@ func (ctl *Controller) RoutePath(router *gin.Engine) {
 	api.PUT("/processes/:id/watch", requireJSON, handleUpdateWatch(store, monitor))
 	api.GET("/processes/:id/watch-test", handleWatchTest(monitor))
 	api.POST("/processes/:id/:action", requireJSON, handleControl(monitor))
+
+	// 프로그램 업데이트: 서버의 폴더 · 파일 둘러보기와 바꾸기
+	api.GET("/servers/:id/browse", handleBrowse(monitor))
+	api.POST("/servers/:id/update", requireTar, handleUpdate(monitor))
 }
 
 // handleLogConfig 는 현재 로그 레벨을 돌려준다. 쿼리를 주면 레벨을 바꾼 뒤 돌려준다.
@@ -78,6 +82,16 @@ const maxConfigBodyBytes = 1 << 20
 func requireJSON(c *gin.Context) {
 	if c.ContentType() != "application/json" {
 		c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type: application/json 이 필요합니다"})
+		return
+	}
+	c.Next()
+}
+
+// requireTar 는 업데이트 요청에 Content-Type: application/x-tar 를 요구한다.
+// requireJSON 과 같은 이유(다른 사이트의 <form> 은 이 헤더로 보낼 수 없다)로 CSRF 를 막는다.
+func requireTar(c *gin.Context) {
+	if c.ContentType() != "application/x-tar" {
+		c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type: application/x-tar 가 필요합니다"})
 		return
 	}
 	c.Next()
@@ -295,5 +309,38 @@ func handleControl(monitor *processes.Monitor) gin.HandlerFunc {
 		}
 		logger.Infof("[REST] process %s done: %s (%s)", action, id, message)
 		c.JSON(http.StatusOK, gin.H{"message": message})
+	}
+}
+
+// GET /api/servers/:id/browse?path=/home/ops/app : 서버의 폴더 목록 ( path 가 없으면 SSH 계정의 홈, 홈 밖은 거부 )
+func handleBrowse(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		dir, err := monitor.BrowseRemote(c.Request.Context(), c.Param("id"), c.Query("path"))
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, dir)
+	}
+}
+
+// POST /api/servers/:id/update?path=/home/ops/app&kind=dir|file ( 본문: tar ) : 서버의 폴더 · 파일을 올린 내용으로 바꾼다.
+// 기존 대상은 '<이름>.bak.<YYYYMMDD-HHmmss>' 로 남긴다. ( 누가 했는지 로그에 남긴다 )
+func handleUpdate(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, target, kind := c.Param("id"), c.Query("path"), c.Query("kind")
+		logger.Warnf("[REST] program update requested: %s %s (%s, %d bytes), remote: %s", id, target, kind, c.Request.ContentLength, c.ClientIP())
+
+		result, err := monitor.UpdateRemote(c.Request.Context(), id, target, kind, c.Request.Body, c.Request.ContentLength)
+		if err != nil {
+			logger.Warnf("[REST] program update failed: %s %s, err: %v", id, target, err)
+			// 다 받기 전에 실패해도 응답이 브라우저에 닿도록 남은 본문을 마저 읽는다.
+			io.Copy(io.Discard, c.Request.Body)
+			respondError(c, err)
+			return
+		}
+		logger.Warnf("[REST] program updated: %s %s -> backup %s (%d files, %d bytes)", id, result.Path, result.Backup, result.Files, result.Bytes)
+		c.JSON(http.StatusOK, result)
 	}
 }
