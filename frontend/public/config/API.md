@@ -95,6 +95,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | servers[].user | O | SSH 사용자 |
 | servers[].password | | **쓰기 전용**. 저장할 때 비워 두면 기존 비밀번호를 유지합니다. 단 host · port · user 가 바뀌었으면 다시 넣어야 합니다 |
 | servers[].hasPassword | | **조회 전용**. 비밀번호가 저장되어 있으면 true |
+| servers[].baseDir | | 기본 폴더 (절대 경로). 시작 스크립트의 상대 경로 기준 |
 | processes[].id | O | 고유 id (모든 서버에서 유일) |
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
@@ -103,7 +104,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].matchRegex | | 실행 판단 조건: 명령줄(args) 전체에 대한 정규식 (Go RE2 문법). matchName · matchArgs 와 함께 쓸 수 없음. 셋 다 없으면 상태를 확인하지 않음 |
 | processes[].logFiles | | 로그 파일 패턴 목록 (선택, 최대 10개). **비우면 시작 스크립트 폴더의 `*.log`, `*/*.log` … `*/*/*/*/*.log` (5단계)**. 상대 경로는 시작 스크립트 폴더 기준(`..` 금지), 절대 경로는 그대로. 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 펼친 경로의 앞 두 폴더는 와일드카드 없이 |
 | processes[].iniFiles | | INI 파일 패턴 목록 (선택). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini`. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
-| processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
+| processes[].startScript | | 시작 스크립트 (영문 · 숫자 · `. _ - /`). `/` 로 시작하지 않으면 서버 `baseDir` 기준 상대 경로 (`..` 불가, `baseDir` 필요) |
 | processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와 실행 판단 조건 필요 |
 
 예전 형식(`match` · `watchName` · `watchArgs`)의 설정 파일은 읽을 때 조건 하나로 바뀝니다. 감시 조건이 있으면 `matchName` · `matchArgs` 로, 없으면 `match` 를 `matchRegex` 로 씁니다. 저장(PUT)할 때는 새 필드만 받습니다.
@@ -269,6 +270,11 @@ INI 파일 패턴에 맞는 `path`(절대 경로) 파일을 통째로 읽습니�
 ```
 
 - 폴더 먼저, 이름 순. 심볼릭 링크는 가리키는 대상의 종류(`dir` · `file`)로 옵니다. 대상이 없는 링크는 `link`, 장치 파일 등은 `other`.
+
+### GET /api/servers/:id/ps
+
+서버에서 지금 실행 중인 프로세스입니다. `조건` 창의 '실행 중인 프로세스에서 고르기' 에 씁니다. (`ps` 결과를 상태 확인과 공유)
+PID 1 · 커널 스레드(`[kworker/0:1]` 등) · 상태 확인용 `ps` 는 뺍니다. 응답 `{"processes": [{"pid": 1234, "cpu": 0.5, "mem": 1.2, "elapsed": "01:02:03", "command": "java -jar /opt/app/app.jar"}]}`
 
 ### POST /api/servers/:id/update?path=/home/ops/app&kind=dir
 

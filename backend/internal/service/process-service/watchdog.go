@@ -102,6 +102,7 @@ func (m *Monitor) watchOnce(ctx context.Context) time.Duration {
 	watched := map[string][]Process{}
 	for _, p := range config.Processes {
 		if p.AutoRestart && p.hasCondition() && p.StartScript != "" {
+			p.StartScript = servers[p.Server].scriptPath(p.StartScript)
 			watched[p.Server] = append(watched[p.Server], p)
 		}
 	}
@@ -211,4 +212,24 @@ func (m *Monitor) WatchTest(ctx context.Context, processID, name, args, regex st
 		return nil, snapshot.err
 	}
 	return findInstances(process, snapshot.rows), nil
+}
+
+// RunningProcesses 는 서버에서 지금 실행 중인 프로세스 목록이다. (조건 창에서 고르면 실행 판단 조건을 채운다)
+// PID 1 · 커널 스레드 · 상태 확인용 ps 는 뺀다.
+func (m *Monitor) RunningProcesses(ctx context.Context, serverID string) ([]Instance, error) {
+	server, err := m.findServer(serverID)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := m.ps(ctx, server, false)
+	if snapshot.err != nil {
+		return nil, snapshot.err
+	}
+	rows := []Instance{}
+	for _, row := range snapshot.rows {
+		if isUserProcess(row) {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }

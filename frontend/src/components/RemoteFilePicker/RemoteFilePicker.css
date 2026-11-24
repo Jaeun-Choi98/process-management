@@ -1,0 +1,142 @@
+/* 설정 창(z-index 200) 위에 열린다. */
+.remote-file-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--overlay);
+}
+
+.remote-file-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  height: min(640px, 100%);
+  font-size: 0.8rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.remote-file-picker-header,
+.remote-file-picker-footer,
+.remote-file-picker-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+}
+
+.remote-file-picker-header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.remote-file-picker-header div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.remote-file-picker-header span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.remote-file-picker-path {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.remote-file-picker-path code,
+.remote-file-picker-selected {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-picker-list {
+  flex: 1;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.remote-file-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 16px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.remote-file-picker-row:hover { background: var(--surface-2); }
+
+.remote-file-picker-row-selected,
+.remote-file-picker-row-selected:hover {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.remote-file-picker-row-selected .remote-file-picker-meta { color: inherit; opacity: 0.75; }
+
+.remote-file-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-picker-meta {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.remote-file-picker-muted { color: var(--text-muted); }
+
+.remote-file-picker-placeholder {
+  padding: 12px 16px;
+  color: var(--text-muted);
+}
+
+.remote-file-picker-notice,
+.remote-file-picker-error {
+  margin: 8px 16px 0;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  border-radius: var(--radius);
+}
+
+.remote-file-picker-notice {
+  color: var(--warning);
+  background: var(--surface-2);
+}
+
+.remote-file-picker-error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.remote-file-picker-footer {
+  border-top: 1px solid var(--border);
+}

@@ -149,3 +149,34 @@
   align-items: center;
   gap: 6px;
 }
+
+/* 실행 중인 프로세스에서 고르기 */
+.watch-editor-hint { color: var(--text-muted); }
+
+.watch-editor-running {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.watch-editor-running .watch-editor-found {
+  max-height: 220px;
+  padding: 4px 0;
+}
+
+.watch-editor-running-row {
+  display: block;
+  width: 100%;
+  padding: 3px 10px;
+  overflow: hidden;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.watch-editor-running-row:hover { background: var(--surface-2); }

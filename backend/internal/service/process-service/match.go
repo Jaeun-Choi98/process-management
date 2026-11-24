@@ -19,6 +19,12 @@ func (p Process) hasCondition() bool {
 	return p.MatchName != "" || p.MatchArgs != "" || p.MatchRegex != ""
 }
 
+// isUserProcess 는 PID 1 · 상태 확인용 ps 자체 · 커널 스레드([kworker/0:1] 등)가 아닌 프로세스인지다.
+func isUserProcess(row Instance) bool {
+	command := strings.TrimSpace(row.Command)
+	return row.PID > 1 && command != "" && !strings.HasPrefix(command, "[") && !strings.Contains(command, psArgs)
+}
+
 // findInstances 는 ps 결과에서 실행 판단 조건에 맞는 프로세스를 고른다. 조건이 없거나 정규식이 잘못되었으면 빈 목록이다.
 func findInstances(p Process, rows []Instance) []Instance {
 	instances := []Instance{}
@@ -33,10 +39,10 @@ func findInstances(p Process, rows []Instance) []Instance {
 		}
 	}
 	for _, row := range rows {
-		fields := strings.Fields(row.Command)
-		if row.PID <= 1 || len(fields) == 0 || strings.Contains(row.Command, psArgs) {
+		if !isUserProcess(row) {
 			continue
 		}
+		fields := strings.Fields(row.Command)
 		var ok bool
 		if pattern != nil {
 			ok = pattern.MatchString(row.Command)

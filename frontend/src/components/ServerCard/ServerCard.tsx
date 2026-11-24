@@ -4,7 +4,7 @@ import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../type
 import { ServerState } from '../StatusSidebar/StatusSidebar';
 import { FileRoot } from '../LogViewer/LogViewer';
 import { requestApi } from '../../api/client';
-import { describeCondition, effectivePatterns, hasCondition } from '../../utils/schema';
+import { describeCondition, effectivePatterns, hasCondition, scriptPath } from '../../utils/schema';
 import './ServerCard.css';
 
 type ProcessStatus = ServerStatus['processes'][number];
@@ -117,7 +117,9 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
               </tr>
             </thead>
             <tbody>
-              {processes.map(process => {
+              {processes.map(listed => {
+                // 시작 스크립트를 파일 이름만 적었으면 서버 기본 폴더 기준 전체 경로로 바꿔 쓴다. (로그 · INI 기본 폴더도 이 기준)
+                const process = { ...listed, startScript: scriptPath(listed.startScript, server.baseDir) };
                 const processStatus = status?.processes.find(s => s.id === process.id);
                 const instances = processStatus?.instances ?? [];
                 const running = instances.length > 0;

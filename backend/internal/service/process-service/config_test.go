@@ -375,3 +375,72 @@ func TestLoadMigratesMatchCondition(t *testing.T) {
 		t.Errorf("migrated = %+v\nwant %+v", c.Processes, want)
 	}
 }
+
+func TestRelativeStartScript(t *testing.T) {
+	config := func(baseDir, script string) Config {
+		return Config{
+			Groups:    []Group{{Slug: "uw", Name: "의왕"}},
+			Servers:   []Server{{ID: "s1", Group: "uw", Host: "10.0.0.1", User: "ops", Password: "pw", BaseDir: baseDir}},
+			Processes: []Process{{ID: "p1", Server: "s1", StartScript: script, LogFiles: []string{"logs/*.log"}}},
+		}
+	}
+	for _, tc := range []struct {
+		baseDir, script, wantErr string
+	}{
+		{"/home/ops/app", "start.sh", ""},
+		{"/home/ops/app", "bin/start.sh", ""},
+		{"/home/ops/app", "/opt/other/start.sh", ""},
+		{"", "start.sh", "기본 폴더가 필요합니다"},
+		{"/home/ops/app", "../start.sh", "startScript"},
+		{"/home/ops/app", "bin/../../x.sh", "startScript"},
+		{"/home/ops/app", "start.sh; rm", "startScript"},
+		{"home/ops", "/opt/a/start.sh", "baseDir"},
+		{"/home/ops/../app", "/opt/a/start.sh", "baseDir"},
+	} {
+		c := config(tc.baseDir, tc.script)
+		err := c.Validate()
+		if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("baseDir %q script %q: %v, want %q", tc.baseDir, tc.script, err, tc.wantErr)
+		}
+	}
+
+	// 기본 폴더 기준으로 바꾼 경로를 시작 · 로그 패턴에 쓴다.
+	server := Server{BaseDir: "/home/ops/app"}
+	if got := server.scriptPath("bin/start.sh"); got != "/home/ops/app/bin/start.sh" {
+		t.Errorf("scriptPath = %q", got)
+	}
+	if got := server.scriptPath("/opt/a/start.sh"); got != "/opt/a/start.sh" {
+		t.Errorf("absolute scriptPath = %q", got)
+	}
+	dir := t.TempDir()
+	store := NewStore(filepath.Join(dir, "processes.json"))
+	body, _ := json.Marshal(config("/home/ops/app", "bin/start.sh"))
+	if _, err := store.Save(body); err != nil {
+		t.Fatal(err)
+	}
+	monitor := NewMonitor(store, filepath.Join(dir, "known_hosts"))
+	process, _, err := monitor.find("p1")
+	if err != nil || process.StartScript != "/home/ops/app/bin/start.sh" {
+		t.Fatalf("find = %q, %v", process.StartScript, err)
+	}
+	if patterns, _ := process.EffectivePatterns(RootLog); len(patterns) != 1 || patterns[0] != "/home/ops/app/bin/logs/*.log" {
+		t.Errorf("patterns = %v", patterns)
+	}
+	// 저장된 설정은 적은 그대로(상대 경로) 둔다.
+	if saved, _ := store.Load(); saved.Processes[0].StartScript != "bin/start.sh" {
+		t.Errorf("saved = %q", saved.Processes[0].StartScript)
+	}
+}
+
+func TestIsUserProcess(t *testing.T) {
+	for row, want := range map[Instance]bool{
+		{PID: 1, Command: "/sbin/init"}:            false,
+		{PID: 20, Command: "[kworker/0:1]"}:        false,
+		{PID: 30, Command: psArgs}:                 false,
+		{PID: 40, Command: "java -jar /opt/a.jar"}: true,
+	} {
+		if got := isUserProcess(row); got != want {
+			t.Errorf("%+v = %v", row, got)
+		}
+	}
+}

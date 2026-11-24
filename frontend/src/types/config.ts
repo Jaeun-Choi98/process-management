@@ -51,6 +51,11 @@ export interface ServerEntry {
   password?: string;
   /** 조회 전용. 서버에 비밀번호가 저장되어 있으면 true */
   hasPassword?: boolean;
+  /**
+   * 기본 폴더 (예: /home/ops/app). 프로세스의 시작 스크립트를 파일 이름(start.sh)이나 상대 경로(bin/start.sh)로
+   * 적으면 이 폴더 기준이다. 프로그램 업데이트 창 · 시작 스크립트 찾아보기도 여기서 시작한다.
+   */
+  baseDir?: string;
 }
 
 export interface ProcessEntry {

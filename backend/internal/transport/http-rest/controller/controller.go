@@ -54,6 +54,7 @@ func (ctl *Controller) RoutePath(router *gin.Engine) {
 
 	// 프로그램 업데이트: 서버의 폴더 · 파일 둘러보기와 바꾸기
 	api.GET("/servers/:id/browse", handleBrowse(monitor))
+	api.GET("/servers/:id/ps", handleRunningProcesses(monitor))
 	api.POST("/servers/:id/update", requireTar, handleUpdate(monitor))
 }
 
@@ -342,5 +343,18 @@ func handleUpdate(monitor *processes.Monitor) gin.HandlerFunc {
 		}
 		logger.Warnf("[REST] program updated: %s %s -> backup %s (%d files, %d bytes)", id, result.Path, result.Backup, result.Files, result.Bytes)
 		c.JSON(http.StatusOK, result)
+	}
+}
+
+// GET /api/servers/:id/ps : 서버에서 지금 실행 중인 프로세스 ( 조건 창에서 골라 실행 판단 조건을 채운다 )
+func handleRunningProcesses(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rows, err := monitor.RunningProcesses(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, gin.H{"processes": rows})
 	}
 }

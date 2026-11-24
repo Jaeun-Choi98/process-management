@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import Icon from '../Icon/Icon';
 import { ProcessConfig, ProcessEntry, ProcessInstance, ServerStatus } from '../../types/config';
 import { requestApi } from '../../api/client';
+import { conditionFromCommand } from '../../utils/schema';
 import './WatchEditor.css';
 
 interface WatchEditorProps {
@@ -16,6 +17,9 @@ interface WatchEditorProps {
 
 /** 아래에서 process 를 프로세스 항목 이름으로 쓰므로 환경 변수는 여기서 읽어 둔다. */
 const PROCESSES_API = `${process.env.PUBLIC_URL}/api/processes`;
+const SERVERS_API = `${process.env.PUBLIC_URL}/api/servers`;
+
+type Condition = { matchName: string; matchArgs: string; matchRegex: string };
 
 /** 실행 판단 조건 방식: 이름 · 문자열(정확한 비교) 또는 정규식 */
 type Mode = 'text' | 'regex';
@@ -35,9 +39,12 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
   const [found, setFound] = useState<ProcessInstance[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** '실행 중인 프로세스에서 고르기' 목록 (닫혀 있으면 null) */
+  const [running, setRunning] = useState<ProcessInstance[] | null>(null);
+  const [runningFilter, setRunningFilter] = useState('');
 
   // 고른 방식의 값만 보낸다. (다른 방식 칸에 남은 값은 저장하지 않는다)
-  const condition =
+  const condition: Condition =
     mode === 'regex'
       ? { matchName: '', matchArgs: '', matchRegex: matchRegex.trim() }
       : { matchName: matchName.trim(), matchArgs: matchArgs.trim(), matchRegex: '' };
@@ -51,11 +58,11 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [onClose]);
 
-  const test = async () => {
+  const test = async (checked: Condition = condition) => {
     setBusy(true);
     setError(null);
     try {
-      const query = new URLSearchParams({ name: condition.matchName, args: condition.matchArgs, regex: condition.matchRegex });
+      const query = new URLSearchParams({ name: checked.matchName, args: checked.matchArgs, regex: checked.matchRegex });
       setFound((await requestApi<{ instances: ProcessInstance[] }>(`${base}/watch-test?${query}`)).instances);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -81,6 +88,34 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
       setBusy(false);
     }
   };
+
+  /** 서버에서 지금 실행 중인 프로세스 목록을 연다. */
+  const openRunning = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await requestApi<{ processes: ProcessInstance[] }>(`${SERVERS_API}/${encodeURIComponent(target.server)}/ps`);
+      setRunning(response.processes);
+      setRunningFilter('');
+    } catch (e) {
+      setError(`실행 중인 프로세스를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 목록에서 고른 프로세스의 명령줄로 조건을 채우고, 바로 몇 개가 맞는지 확인한다. */
+  const pickRunning = (instance: ProcessInstance) => {
+    const picked = conditionFromCommand(instance.command);
+    setMode('text');
+    setMatchName(picked.matchName);
+    setMatchArgs(picked.matchArgs);
+    setRunning(null);
+    void test({ ...picked, matchRegex: '' });
+  };
+
+  const lowerFilter = runningFilter.toLowerCase();
+  const shownRunning = running?.filter(r => r.command.toLowerCase().includes(lowerFilter) || String(r.pid).includes(lowerFilter)) ?? [];
 
   const changeCondition = (setter: (value: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     setter(e.target.value);
@@ -128,6 +163,34 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
             </label>
           </fieldset>
 
+          <div className="watch-editor-test">
+            <button className="btn btn-secondary" onClick={running ? () => setRunning(null) : openRunning} disabled={busy}>
+              {running ? '목록 닫기' : '실행 중인 프로세스에서 고르기'}
+            </button>
+            {!running && <small className="watch-editor-hint">지금 떠 있는 프로세스를 고르면 아래 칸을 자동으로 채웁니다.</small>}
+          </div>
+          {running && (
+            <div className="watch-editor-running">
+              <input
+                className="input"
+                placeholder="찾기 (예: java, app.jar, PID)"
+                value={runningFilter}
+                onChange={e => setRunningFilter(e.target.value)}
+                autoFocus
+              />
+              <ul className="watch-editor-found">
+                {shownRunning.length === 0 && <li>맞는 프로세스가 없습니다.</li>}
+                {shownRunning.map(instance => (
+                  <li key={instance.pid}>
+                    <button className="watch-editor-running-row" onClick={() => pickRunning(instance)} title={instance.command}>
+                      <code>{instance.pid}</code> {instance.command}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {mode === 'text' ? (
             <>
               <label className="watch-editor-field">
@@ -162,7 +225,7 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
           )}
 
           <div className="watch-editor-test">
-            <button className="btn btn-secondary" onClick={test} disabled={!hasCondition || busy}>
+            <button className="btn btn-secondary" onClick={() => test()} disabled={!hasCondition || busy}>
               지금 맞는 프로세스 확인
             </button>
             {found && (

@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
-import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_RESTART_DELAY_MS, DEFAULT_WATCH_INTERVAL_MS, migrateLegacyMatch, validateProcessConfig } from '../../utils/schema';
+import RemoteFilePicker from '../RemoteFilePicker/RemoteFilePicker';
+import {
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_RESTART_DELAY_MS,
+  DEFAULT_WATCH_INTERVAL_MS,
+  migrateLegacyMatch,
+  scriptPath,
+  validateProcessConfig,
+} from '../../utils/schema';
 import { ProcessConfig, ServerEntry } from '../../types/config';
 import './ConfigEditor.css';
 
@@ -48,7 +56,9 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
   {
     section: 'servers',
     title: '서버',
-    description: 'SSH 비밀번호는 서버 파일에만 저장되고 화면에는 다시 보이지 않습니다. 바꿀 때만 입력하세요. host · port · user 를 바꾸면 다시 입력해야 합니다.',
+    description:
+      'SSH 비밀번호는 서버 파일에만 저장되고 화면에는 다시 보이지 않습니다. 바꿀 때만 입력하세요. host · port · user 를 바꾸면 다시 입력해야 합니다. ' +
+      '기본 폴더(프로그램이 설치된 폴더)를 적어 두면 프로세스의 시작 스크립트는 파일 이름만 적으면 되고, 찾아보기 · 프로그램 업데이트도 그 폴더에서 시작합니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'group', title: '그룹 *', type: 'select' },
@@ -57,13 +67,14 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
       { field: 'port', title: 'port', placeholder: '22', type: 'number', className: 'config-editor-col-narrow' },
       { field: 'user', title: 'user *', placeholder: 'ops' },
       { field: 'password', title: '비밀번호 *', type: 'password' },
+      { field: 'baseDir', title: '기본 폴더', placeholder: '/home/ops/app', className: 'config-editor-col-wide' },
     ],
   },
   {
     section: 'processes',
     title: '프로세스',
     description:
-      '시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      '시작 스크립트는 [찾아보기]로 서버에서 고르거나, 서버 기본 폴더 기준 파일 이름(start.sh, bin/start.sh) 또는 / 로 시작하는 전체 경로로 적습니다. ' +
       '로그 · INI 파일은 비워 두면 시작 스크립트 폴더 아래의 *.log(5단계) · *.ini(3단계)를 찾습니다. ' +
       '다른 곳을 보려면 패턴을 적습니다: 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로는 그대로. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않습니다. ' +
       '실행 중인지 판단하는 조건과 자동 재시작은 저장한 뒤 모니터링 화면의 각 프로세스 [조건] 에서 정합니다.',
@@ -71,7 +82,7 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
-      { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
+      { field: 'startScript', title: '시작 스크립트', placeholder: 'start.sh 또는 /opt/app/start.sh', className: 'config-editor-col-wide' },
       { field: 'logFiles', title: '로그 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.log', className: 'config-editor-col-wide' },
       { field: 'iniFiles', title: 'INI 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.ini', className: 'config-editor-col-wide' },
     ],
@@ -109,6 +120,7 @@ const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
     port: s.port?.toString() ?? '',
     user: s.user,
     password: s.password ?? '',
+    baseDir: s.baseDir ?? '',
   })),
   processes: config.processes.map(p => ({
     key: String(nextRowKey++),
@@ -167,6 +179,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  /** 시작 스크립트 찾아보기 창 (어느 프로세스 행의 값을 채울지) */
+  const [picker, setPicker] = useState<{ rowKey: string; serverId: string; serverLabel: string; baseDir: string } | null>(null);
 
   /** 서버에 저장되어 있는 서버 정보 (비밀번호가 저장되어 있는지 판단용) */
   const savedServers = useMemo(() => new Map(config.servers.map(s => [s.id, s])), [config.servers]);
@@ -179,6 +193,29 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
         (saved.port ?? 22) === (Number(row.port) || 22) &&
         saved.user === row.user.trim()
     );
+  };
+
+  /**
+   * 서버 파일을 둘러볼 수 있는지. Go 서버는 저장된 접속 정보로 접속하므로, 저장된 서버이고 host · port · user 가 그대로여야 한다.
+   * 안 되면 이유를 돌려준다.
+   */
+  const browseProblem = (serverRow: Row | undefined) => {
+    if (!serverRow) return '서버를 먼저 고르세요';
+    const saved = savedServers.get(serverRow.id.trim());
+    if (!saved) return '새 서버는 먼저 저장해야 찾아볼 수 있습니다';
+    if (saved.host !== serverRow.host.trim() || (saved.port ?? 22) !== (Number(serverRow.port) || 22) || saved.user !== serverRow.user.trim()) {
+      return '접속 정보를 바꾼 서버는 먼저 저장해야 찾아볼 수 있습니다';
+    }
+    return null;
+  };
+
+  /** 고른 파일 경로를 기본 폴더 아래면 상대 경로로 바꿔 넣는다. */
+  const pickStartScript = (path: string) => {
+    if (!picker) return;
+    const base = picker.baseDir.replace(/\/+$/, '');
+    const value = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
+    updateRow('processes', picker.rowKey, 'startScript', value);
+    setPicker(null);
   };
 
   // 입력칸 값을 설정 파일 형태로 바꿔 검사한다.
@@ -200,6 +237,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
         user: r.user.trim(),
         password: r.password || undefined,
         hasPassword: keepsPassword(r) || undefined,
+        baseDir: text(r.baseDir),
       })),
       processes: rows.processes.map(r => ({
         id: r.id.trim(),
@@ -275,7 +313,16 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
 
       const empty: Record<Section, Record<string, string>> = {
         groups: { slug: `${prefix}-${n}`, name: '' },
-        servers: { id: `${prefix}-${n}`, group: groupMode ? scope : prev.groups[0]?.slug ?? '', label: '', host: '', port: '', user: '', password: '' },
+        servers: {
+          id: `${prefix}-${n}`,
+          group: groupMode ? scope : prev.groups[0]?.slug ?? '',
+          label: '',
+          host: '',
+          port: '',
+          user: '',
+          password: '',
+          baseDir: '',
+        },
         processes: {
           id: `${prefix}-${n}`,
           server: prev.servers.find(r => !groupMode || r.group === scope)?.id ?? '',
@@ -336,6 +383,17 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
 
   const handleSave = async () => {
     if (!validation.ok) return;
+    // 기본 폴더를 바꾸면 파일 이름만 적은 시작 스크립트의 실제 경로가 함께 바뀌므로 확인한다.
+    const moved = validation.config.processes.flatMap(p => {
+      const before = savedServers.get(p.server)?.baseDir;
+      const after = validation.config.servers.find(s => s.id === p.server)?.baseDir;
+      const oldPath = scriptPath(p.startScript, before);
+      const newPath = scriptPath(p.startScript, after);
+      return savedServers.has(p.server) && before !== after && p.startScript && !p.startScript.startsWith('/') && oldPath !== newPath
+        ? [`${p.label || p.id}: ${oldPath} → ${newPath}`]
+        : [];
+    });
+    if (moved.length > 0 && !window.confirm(`기본 폴더를 바꿔 다음 시작 스크립트 경로가 바뀝니다. 저장할까요?\n\n${moved.join('\n')}`)) return;
     setSaving(true);
     setMessage(null);
     try {
@@ -444,6 +502,36 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                             const fieldClass = inputClass(`${section}.${i}.${field}`);
                             const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
                               updateRow(section, row.key, field, e.target.value);
+                            if (section === 'processes' && field === 'startScript') {
+                              const serverRow = rows.servers.find(r => r.id.trim() === row.server);
+                              const baseDir = serverRow?.baseDir.trim() ?? '';
+                              const problem = browseProblem(serverRow);
+                              const value = row.startScript.trim();
+                              const resolved = value && !value.startsWith('/') && baseDir ? scriptPath(value, baseDir) : null;
+                              return (
+                                <td key={field} className={className}>
+                                  <div className="config-editor-picker">
+                                    <input className={fieldClass} type="text" autoComplete="off" placeholder={placeholder} value={row[field]} onChange={onChange} />
+                                    <button
+                                      className="btn btn-secondary"
+                                      onClick={() =>
+                                        serverRow &&
+                                        setPicker({ rowKey: row.key, serverId: serverRow.id.trim(), serverLabel: serverRow.label.trim() || serverRow.id.trim(), baseDir })
+                                      }
+                                      disabled={problem !== null}
+                                      title={problem ?? '서버에서 시작 스크립트를 고릅니다'}
+                                    >
+                                      찾아보기
+                                    </button>
+                                  </div>
+                                  {resolved && (
+                                    <small className="config-editor-resolved" title={resolved}>
+                                      {resolved}
+                                    </small>
+                                  )}
+                                </td>
+                              );
+                            }
                             return (
                               <td key={field} className={className}>
                                 {type === 'select' ? (
@@ -494,6 +582,17 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
             );
           })}
         </div>
+
+        {picker && (
+          <RemoteFilePicker
+            serverId={picker.serverId}
+            serverLabel={picker.serverLabel}
+            startDir={picker.baseDir || undefined}
+            title="시작 스크립트 고르기"
+            onPick={pickStartScript}
+            onClose={() => setPicker(null)}
+          />
+        )}
 
         <footer className="config-editor-footer">
           <div className="config-editor-messages">

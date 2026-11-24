@@ -86,6 +86,17 @@ func TestUpdateOverSSH(t *testing.T) {
 		t.Errorf("browse unknown server: %v", err)
 	}
 
+	// 실행 중인 프로세스 목록: 커널 스레드 · 상태 확인용 ps 는 없다.
+	if rows, err := monitor.RunningProcesses(ctx, "local"); err != nil || len(rows) == 0 {
+		t.Errorf("running processes = %d, %v", len(rows), err)
+	} else {
+		for _, row := range rows {
+			if !isUserProcess(row) {
+				t.Errorf("unexpected row %+v", row)
+			}
+		}
+	}
+
 	leftovers := func() {
 		t.Helper()
 		if matches, _ := filepath.Glob(filepath.Join(home, ".*.update.*")); len(matches) > 0 {

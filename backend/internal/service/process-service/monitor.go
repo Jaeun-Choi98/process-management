@@ -271,6 +271,8 @@ func (m *Monitor) find(processID string) (Process, Server, error) {
 		}
 		for _, s := range config.Servers {
 			if s.ID == p.Server {
+				// 이후로는 시작 스크립트를 절대 경로로 쓴다.
+				p.StartScript = s.scriptPath(p.StartScript)
 				return p, s, nil
 			}
 		}

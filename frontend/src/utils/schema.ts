@@ -14,6 +14,17 @@ const DEFAULT_PATTERN_DEPTH = { log: 5, ini: 3 };
 
 const dirname = (file: string) => file.slice(0, file.lastIndexOf('/')) || '/';
 
+/**
+ * 시작 스크립트의 절대 경로. '/' 로 시작하지 않으면 서버 기본 폴더 기준 상대 경로다. (Go 서버의 Server.scriptPath)
+ * 기본 폴더가 없으면 적은 그대로 돌려준다. (저장할 때 막힌다)
+ */
+export const scriptPath = (startScript: string | undefined, baseDir: string | undefined): string | undefined =>
+  !startScript || startScript.startsWith('/') || !baseDir ? startScript : `${baseDir}/${startScript}`;
+
+/** 시작 스크립트를 상대 경로로 적어도 되는 모양인지 (start.sh, bin/start.sh. '..' · '//' 금지) */
+const isSafeRelativePath = (value: string) =>
+  /^[A-Za-z0-9._-][A-Za-z0-9._/-]*$/.test(value) && !/(^|\/)\.\.?(\/|$)|\/\/|\/$/.test(value);
+
 /** 상대 경로 패턴을 시작 스크립트 폴더 기준 절대 경로로 바꾼다. (Go 서버의 resolvePattern) */
 function resolvePattern(startScript: string | undefined, pattern: unknown): { pattern: string } | { problem: string } {
   if (typeof pattern !== 'string') return { problem: '문자열이어야 합니다' };
@@ -76,6 +87,21 @@ export function checkFilePattern(pattern: unknown, ini: boolean): string {
 type Condition = Pick<ProcessEntry, 'matchName' | 'matchArgs' | 'matchRegex'>;
 
 /** 실행 판단 조건이 하나라도 있는지 (Go 서버의 Process.hasCondition) */
+/**
+ * 실행 중인 프로세스의 명령줄로 실행 판단 조건을 만든다. (조건 창의 '실행 중인 프로세스에서 고르기')
+ *   실행 이름: 첫 단어의 파일 이름 (/usr/bin/java → java)
+ *   명령줄 문자열: 실행하는 프로그램 파일로 보이는 인자 하나 (.jar · .py · .js · .sh 등 → / 가 들어간 인자 → 옵션이 아닌 첫 인자).
+ *                  옵션 값(포트 · 날짜 등)은 바뀔 수 있어 넣지 않는다. 없으면 이름만 쓴다.
+ */
+export function conditionFromCommand(command: string): { matchName: string; matchArgs: string } {
+  const [program = '', ...args] = command.trim().split(/\s+/);
+  const matchName = program.slice(program.lastIndexOf('/') + 1);
+  const plain = args.filter(arg => !arg.startsWith('-'));
+  const matchArgs =
+    plain.find(arg => /\.(jar|war|py|js|mjs|cjs|ts|sh|rb|pl|php|exe|dll)$/i.test(arg)) ?? plain.find(arg => arg.includes('/')) ?? plain[0] ?? '';
+  return { matchName, matchArgs };
+}
+
 export const hasCondition = (p: Condition) => Boolean(p.matchName || p.matchArgs || p.matchRegex);
 
 /** 실행 판단 조건을 사람이 읽는 문장으로 (카드의 마우스 설명 · 검색) */
@@ -158,6 +184,8 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
   });
 
   const serverIds = new Set<string>();
+  /** 서버 id → 기본 폴더 (시작 스크립트 상대 경로 확인용) */
+  const baseDirs = new Map<string, string | undefined>();
   servers.forEach((server: unknown, i: number) => {
     const at = `servers[${i}]`;
     if (!isObject(server)) return errors.push(`${at}: 객체여야 합니다`);
@@ -172,6 +200,10 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
     if (!isText(server.user)) errors.push(`${at}.user: 비어 있습니다`);
     if (!isText(server.password) && server.hasPassword !== true) errors.push(`${at}.password: 비어 있습니다`);
+    if (server.baseDir !== undefined && !isSafePath(server.baseDir)) {
+      errors.push(`${at}.baseDir: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
+    }
+    baseDirs.set(String(server.id), typeof server.baseDir === 'string' ? server.baseDir : undefined);
   });
 
   const processIds = new Set<string>();
@@ -199,8 +231,15 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
       errors.push(`${at}.matchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)`);
     }
 
-    if (process.startScript !== undefined && !isSafePath(process.startScript)) {
-      errors.push(`${at}.startScript: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
+    // '/' 로 시작하지 않으면 서버 기본 폴더 기준 상대 경로 (Go 서버와 같은 규칙)
+    const baseDir = baseDirs.get(String(process.server));
+    const rawScript = process.startScript;
+    if (rawScript !== undefined) {
+      if (typeof rawScript !== 'string' || (rawScript.startsWith('/') ? !isSafePath(rawScript) : !isSafeRelativePath(rawScript))) {
+        errors.push(`${at}.startScript: 영문 · 숫자 · . _ - / 로 된 경로가 필요합니다 (기본 폴더 밖 '..' 은 안 됩니다)`);
+      } else if (!rawScript.startsWith('/') && !baseDir) {
+        errors.push(`${at}.startScript: 파일 이름만 적으려면 서버에 기본 폴더가 필요합니다 (또는 / 로 시작하는 전체 경로)`);
+      }
     }
     for (const field of ['logFiles', 'iniFiles'] as const) {
       const patterns = process[field];
@@ -211,7 +250,7 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
       }
       if (patterns.length > MAX_FILE_PATTERNS) errors.push(`${at}.${field}: 패턴은 ${MAX_FILE_PATTERNS}개까지 적을 수 있습니다`);
       for (const pattern of patterns) {
-        const startScript = typeof process.startScript === 'string' ? process.startScript : undefined;
+        const startScript = typeof rawScript === 'string' ? scriptPath(rawScript, baseDir) : undefined;
         const resolved = resolvePattern(startScript, pattern);
         const problem = 'problem' in resolved ? resolved.problem : checkFilePattern(resolved.pattern, field === 'iniFiles');
         if (problem) errors.push(`${at}.${field}: ${pattern}: ${problem}`);

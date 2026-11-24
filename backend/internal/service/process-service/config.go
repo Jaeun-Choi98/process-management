@@ -51,6 +51,9 @@ type Server struct {
 	Password string `json:"password,omitempty"`
 	// 조회 전용. 비밀번호가 저장되어 있으면 true. (저장 요청에 들어와도 무시한다)
 	HasPassword bool `json:"hasPassword,omitempty"`
+	// 기본 폴더 (예: /home/ops/app). 프로세스의 시작 스크립트를 상대 경로(start.sh, bin/start.sh)로 적으면 이 폴더 기준이다.
+	// 프로그램 업데이트 창 · 시작 스크립트 찾아보기도 이 폴더에서 시작한다. (홈 폴더 아래일 때)
+	BaseDir string `json:"baseDir,omitempty"`
 }
 
 type Process struct {
@@ -81,6 +84,14 @@ type Process struct {
 	AutoRestart bool `json:"autoRestart,omitempty"`
 }
 
+// scriptPath 는 시작 스크립트의 절대 경로다. 상대 경로면 기본 폴더 기준으로 바꾼다. (Validate 를 통과한 설정 기준)
+func (s Server) scriptPath(script string) string {
+	if script == "" || strings.HasPrefix(script, "/") || s.BaseDir == "" {
+		return script
+	}
+	return s.BaseDir + "/" + script
+}
+
 func (s Server) addr() string {
 	port := s.Port
 	if port == 0 {
@@ -94,6 +105,8 @@ var (
 	slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	hostPattern = regexp.MustCompile(`^[A-Za-z0-9.:-]+$`)
 	pathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+	// 기본 폴더 기준 상대 경로 (start.sh, bin/start.sh)
+	relativePathPattern = regexp.MustCompile(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
 	// 파일 패턴: 경로 문자에 셸 와일드카드 * ? 만 더 허용한다. (명령에 따옴표 없이 넣어 셸이 펼치게 하므로)
 	filePatternChars = regexp.MustCompile(`^/[A-Za-z0-9._/*?-]+$`)
 	// 실행 파일 이름 (경로 · 공백 없이)
@@ -139,7 +152,9 @@ func (c *Config) Validate() error {
 	}
 
 	serverIDs := map[string]bool{}
+	servers := map[string]Server{}
 	for i, s := range c.Servers {
+		servers[s.ID] = s
 		at := fmt.Sprintf("servers[%d]", i)
 		switch {
 		case s.ID == "":
@@ -162,6 +177,9 @@ func (c *Config) Validate() error {
 		}
 		if s.Password == "" {
 			add("%s.password: 비어 있습니다", at)
+		}
+		if s.BaseDir != "" && (!pathPattern.MatchString(s.BaseDir) || path.Clean(s.BaseDir) != s.BaseDir) {
+			add("%s.baseDir: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at)
 		}
 	}
 
@@ -190,15 +208,26 @@ func (c *Config) Validate() error {
 			add("%s.matchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)", at)
 		}
 		// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
-		if p.StartScript != "" && (!pathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript) {
-			add("%s.startScript: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at)
+		// '/' 로 시작하지 않으면 서버 기본 폴더 기준 상대 경로이고, 기본 폴더 밖('..')은 가리킬 수 없다.
+		script := servers[p.Server].scriptPath(p.StartScript)
+		switch {
+		case p.StartScript == "":
+		case strings.HasPrefix(p.StartScript, "/"):
+			if !pathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript {
+				add("%s.startScript: 영문 · 숫자 · . _ - / 로 된 경로가 필요합니다", at)
+			}
+		case !relativePathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript ||
+			p.StartScript == ".." || strings.HasPrefix(p.StartScript, "../"):
+			add("%s.startScript: 영문 · 숫자 · . _ - / 로 된 경로가 필요합니다 (기본 폴더 밖 '..' 은 안 됩니다)", at)
+		case servers[p.Server].BaseDir == "":
+			add("%s.startScript: 파일 이름만 적으려면 서버에 기본 폴더가 필요합니다 (또는 / 로 시작하는 전체 경로)", at)
 		}
 		for field, patterns := range map[string][]string{"logFiles": p.LogFiles, "iniFiles": p.IniFiles} {
 			if len(patterns) > maxFilePatterns {
 				add("%s.%s: 패턴은 %d개까지 적을 수 있습니다", at, field, maxFilePatterns)
 			}
 			for _, pattern := range patterns {
-				resolved, problem := resolvePattern(p.StartScript, pattern)
+				resolved, problem := resolvePattern(script, pattern)
 				if problem == "" {
 					problem = checkFilePattern(resolved, field == "iniFiles")
 				}

@@ -172,3 +172,31 @@ input.config-editor-input { min-width: 90px; }
   font-size: 0.78rem;
   color: var(--text-muted);
 }
+
+/* 시작 스크립트: 입력칸 + 찾아보기, 아래에 기본 폴더 기준으로 완성된 경로 */
+.config-editor-picker {
+  display: flex;
+  gap: 4px;
+}
+
+.config-editor-picker .config-editor-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-editor-picker .btn {
+  flex-shrink: 0;
+  padding-inline: 8px;
+}
+
+.config-editor-resolved {
+  display: block;
+  max-width: 100%;
+  margin-top: 2px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

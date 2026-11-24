@@ -4,7 +4,7 @@ import { ProcessEntry, RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from 
 import { requestApi, uploadApi } from '../../api/client';
 import { buildTar, TarEntry } from '../../utils/tar';
 import { formatDateTime, formatSize } from '../../utils/format';
-import { hasCondition } from '../../utils/schema';
+import { hasCondition, scriptPath } from '../../utils/schema';
 import './ProgramUpdate.css';
 
 interface ProgramUpdateProps {
@@ -27,8 +27,8 @@ const restartProblem = (p: ProcessEntry) =>
  * 업데이트 대상과 관련 있어 보이는 프로세스: 시작 스크립트가 바꾸는 폴더 안에 있거나(폴더),
  * 바꾸는 파일과 같은 폴더에 있는(파일) 프로세스. 경로는 글자로만 비교하므로 처음 체크 상태로만 쓴다.
  */
-const isRelated = (p: ProcessEntry, target: string, kind: Kind) => {
-  const script = p.startScript ?? '';
+const isRelated = (p: ProcessEntry, baseDir: string | undefined, target: string, kind: Kind) => {
+  const script = scriptPath(p.startScript, baseDir) ?? '';
   return kind === 'dir' ? script.startsWith(`${target}/`) : script.startsWith(`${target.slice(0, target.lastIndexOf('/'))}/`);
 };
 
@@ -145,9 +145,22 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     [base]
   );
 
+  // 서버 기본 폴더에서 시작한다. 없거나 열 수 없으면(홈 밖 등) 홈 폴더.
+  const baseDir = server.baseDir;
   useEffect(() => {
-    void loadRemote('');
-  }, [loadRemote]);
+    const open = async () => {
+      if (baseDir) {
+        try {
+          setRemote(await requestApi<RemoteDir>(`${base}/browse?${new URLSearchParams({ path: baseDir })}`));
+          return;
+        } catch {
+          // 홈 폴더로 연다.
+        }
+      }
+      await loadRemote('');
+    };
+    void open();
+  }, [base, baseDir, loadRemote]);
 
   // React 의 input 속성에는 webkitdirectory 가 없어 직접 붙인다.
   useEffect(() => {
@@ -177,8 +190,8 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   const remoteSelectedType = remoteSelected ? remoteKind(remoteSelected) : null;
   useEffect(() => {
     if (!remoteSelectedPath || !remoteSelectedType) return;
-    setRestartIds(new Set(processes.filter(p => !restartProblem(p) && isRelated(p, remoteSelectedPath, remoteSelectedType)).map(p => p.id)));
-  }, [remoteSelectedPath, remoteSelectedType, processes]);
+    setRestartIds(new Set(processes.filter(p => !restartProblem(p) && isRelated(p, server.baseDir, remoteSelectedPath, remoteSelectedType)).map(p => p.id)));
+  }, [remoteSelectedPath, remoteSelectedType, processes, server.baseDir]);
 
   const toggleRestart = (id: string, checked: boolean) =>
     setRestartIds(prev => {
@@ -417,7 +430,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 {processes.map(p => {
                   const problem = restartProblem(p);
                   return (
-                    <label key={p.id} title={problem ?? p.startScript}>
+                    <label key={p.id} title={problem ?? scriptPath(p.startScript, server.baseDir)}>
                       <input type="checkbox" checked={!problem && restartIds.has(p.id)} disabled={problem !== null} onChange={e => toggleRestart(p.id, e.target.checked)} />
                       {p.label || p.id}
                       {problem && <em> ({problem})</em>}

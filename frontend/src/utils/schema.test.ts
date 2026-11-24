@@ -1,4 +1,4 @@
-import { checkFilePattern, effectivePatterns, migrateLegacyMatch, validateProcessConfig } from './schema';
+import { checkFilePattern, conditionFromCommand, effectivePatterns, migrateLegacyMatch, scriptPath, validateProcessConfig } from './schema';
 
 const valid = {
   pollIntervalMs: 5000,
@@ -122,4 +122,31 @@ test('old config files are converted to a single condition (same as the Go serve
       { id: 'c', server: 's', matchArgs: 'c.jar' },
     ],
   });
+});
+
+test('실행 중인 프로세스 명령줄로 조건을 만든다', () => {
+  expect(conditionFromCommand('/usr/bin/java -Xmx1g -Dlog.dir=/var/log -jar /opt/app/app.jar --port 8080')).toEqual({ matchName: 'java', matchArgs: '/opt/app/app.jar' });
+  expect(conditionFromCommand('python3 manage.py runserver')).toEqual({ matchName: 'python3', matchArgs: 'manage.py' });
+  expect(conditionFromCommand('/home/ops/app/bin/server -c /home/ops/app/conf/a.conf')).toEqual({ matchName: 'server', matchArgs: '/home/ops/app/conf/a.conf' });
+  expect(conditionFromCommand('nginx: master process /usr/sbin/nginx')).toEqual({ matchName: 'nginx:', matchArgs: '/usr/sbin/nginx' });
+  expect(conditionFromCommand('/opt/app/daemon')).toEqual({ matchName: 'daemon', matchArgs: '' });
+});
+
+test('시작 스크립트는 파일 이름만 적으면 서버 기본 폴더 기준이다', () => {
+  expect(scriptPath('bin/start.sh', '/home/ops/app')).toBe('/home/ops/app/bin/start.sh');
+  expect(scriptPath('/opt/a/start.sh', '/home/ops/app')).toBe('/opt/a/start.sh');
+  const config = (baseDir: string | undefined, startScript: string) => ({
+    groups: [{ slug: 'uw', name: '의왕' }],
+    servers: [{ id: 's1', group: 'uw', host: '10.0.0.1', user: 'ops', password: 'pw', baseDir }],
+    processes: [{ id: 'p1', server: 's1', startScript, logFiles: ['logs/*.log'] }],
+  });
+  expect(validateProcessConfig(config('/home/ops/app', 'start.sh')).ok).toBe(true);
+  expect(validateProcessConfig(config(undefined, '/opt/app/start.sh')).ok).toBe(true);
+  const errors = (c: unknown) => {
+    const result = validateProcessConfig(c);
+    return result.ok ? [] : result.errors;
+  };
+  expect(errors(config(undefined, 'start.sh')).join()).toContain('기본 폴더가 필요합니다');
+  expect(errors(config('/home/ops/app', '../start.sh')).join()).toContain('startScript');
+  expect(errors(config('home/ops', '/opt/a/start.sh')).join()).toContain('baseDir');
 });
