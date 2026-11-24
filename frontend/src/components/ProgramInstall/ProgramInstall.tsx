@@ -7,7 +7,7 @@ import { ARCHIVE_ACCEPT, archiveBaseName, deleteUpload, saveUpload } from '../..
 import { detectStarted, fetchRunning, saveConditionFrom, startProcess } from '../../api/startDetect';
 import { buildTar } from '../../utils/tar';
 import { formatSize } from '../../utils/format';
-import { buildLocalTree, describeLocal, listFiles, LocalNode, tarEntries, treeFromUpload } from '../../utils/localFiles';
+import { buildLocalTree, describeLocal, listDirs, listFiles, LocalNode, tarEntries, treeFromUpload } from '../../utils/localFiles';
 import { baseDirOf, conditionFromCommand } from '../../utils/schema';
 import './ProgramInstall.css';
 
@@ -90,20 +90,44 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [busy, picking]);
 
+  /**
+   * 압축 파일 안에서 고른 기준 폴더 (맨 위 폴더를 벗긴 경로, 압축 파일 전체면 '').
+   * 안이 app/app/start.sh 처럼 한 번 더 감싸져 있으면 안쪽 app 을 골라 그 내용만 설치한다.
+   */
+  const [archiveSub, setArchiveSub] = useState('');
+  /** 압축 파일 안의 폴더 (기준 폴더 목록) */
+  const archiveDirs = useMemo(() => (folder?.upload ? listDirs(folder) : []), [folder]);
+  /** 실제로 설치할 내용: 기준 폴더를 골랐으면 그 폴더 */
+  const source = (archiveSub && archiveDirs.find(d => d.path === archiveSub)?.node) || folder;
+
   /** 시작 파일 후보 (후보 순서대로) */
-  const files = useMemo(() => (folder ? startCandidates(folder).map(c => c.path) : []), [folder]);
+  const files = useMemo(() => (source ? startCandidates(source).map(c => c.path) : []), [source]);
+
+  /** 시작 파일을 후보 첫 번째로 미리 골라 둔다. (없으면 비운다) */
+  const presetStart = (node: LocalNode) => {
+    const first = startCandidates(node).find(c => c.score <= 2 && RELATIVE_PATTERN.test(c.path))?.path ?? '';
+    setStartFile(first);
+    setStartAfter(first !== '');
+  };
 
   /** 설치할 내용(폴더 또는 압축 파일)을 정하고 이름 · 시작 파일을 미리 채운다. 전에 올려 둔 압축 파일은 지운다. */
   const chooseSource = (node: LocalNode, displayName: string) => {
     if (folder?.upload && folder.upload.id !== node.upload?.id) void deleteUpload(folder.upload.id);
-    const first = startCandidates(node).find(c => c.score <= 2 && RELATIVE_PATTERN.test(c.path))?.path ?? '';
+    // 압축 파일 맨 위에 파일 없이 폴더 하나만 있으면 그 폴더를 기준으로 미리 골라 둔다. (화면에서 바꿀 수 있다)
+    const only = node.upload && node.children.length === 1 && node.children[0].kind === 'dir' ? node.children[0] : null;
     setFolder(node);
+    setArchiveSub(only ? only.name : '');
     setName(toInstallName(displayName));
     setLabel(displayName);
-    setStartFile(first);
-    setStartAfter(first !== '');
+    presetStart(only ?? node);
     setInstalled(null);
     setCandidates(null);
+  };
+
+  const changeArchiveSub = (sub: string) => {
+    setArchiveSub(sub);
+    const node = (sub && archiveDirs.find(d => d.path === sub)?.node) || folder;
+    if (node) presetStart(node);
   };
 
   const openFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -170,7 +194,9 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
 
   const install = async () => {
     if (!folder || problem) return;
-    if (!window.confirm(`${serverLabel} 의\n${target}\n에 '${folder.name}' (${describeLocal(folder)}) 을(를) 설치할까요?${startFile && startAfter ? '\n설치한 뒤 바로 시작합니다.' : ''}`)) {
+    if (!source) return;
+    const sourceText = folder.upload ? `${folder.upload.name}${archiveSub ? ` 안의 ${archiveSub}/` : ''}` : folder.name;
+    if (!window.confirm(`${serverLabel} 의\n${target}\n에 '${sourceText}' (${describeLocal(source)}) 을(를) 설치할까요?${startFile && startAfter ? '\n설치한 뒤 바로 시작합니다.' : ''}`)) {
       return;
     }
     setBusy(true);
@@ -183,7 +209,7 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
         result = await requestApi<InstallResult>(`${SERVERS_API}/${encodeURIComponent(server.id)}/install-upload`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ upload: folder.upload.id, path: target, start: startFile, label: label.trim() }),
+          body: JSON.stringify({ upload: folder.upload.id, path: target, start: startFile, label: label.trim(), sub: archiveSub }),
         });
       } else {
         const body = buildTar(tarEntries(folder, name));
@@ -282,6 +308,22 @@ const ProgramInstall: React.FC<ProgramInstallProps> = ({ server, onInstalled, on
                 <small>폴더: 브라우저가 '업로드할까요?' 를 물으면 허용하세요. 압축 파일(zip · tar.gz · tgz · tar)은 열면 바로 올려 목록을 확인합니다.</small>
               )}
             </div>
+            {folder?.upload && archiveDirs.length > 0 && (
+              <label className="program-install-field">
+                <span>기준 폴더</span>
+                <select className="input" value={archiveSub} onChange={e => changeArchiveSub(e.target.value)} disabled={locked}>
+                  <option value="">(압축 파일 전체)</option>
+                  {archiveDirs.map(d => (
+                    <option key={d.path} value={d.path}>
+                      {d.path}/ ({describeLocal(d.node)})
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  고른 폴더의 내용만 설치 폴더에 들어갑니다. 압축 파일 안이 app/app/start.sh 처럼 한 번 더 감싸져 있으면 안쪽 폴더를 고르세요.
+                </small>
+              </label>
+            )}
           </section>
 
           <section>

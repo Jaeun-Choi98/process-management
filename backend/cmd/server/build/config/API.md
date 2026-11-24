@@ -302,7 +302,8 @@ INI 파일 패턴에 맞는 `path`(절대 경로) 파일을 통째로 읽습니�
 
 ### POST /api/servers/:id/install-upload
 
-받아 둔 압축 파일로 설치합니다. 본문 `{"upload": "<id>", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱"}`. 응답 · 규칙은 `install` 과 같습니다.
+받아 둔 압축 파일로 설치합니다. 본문 `{"upload": "<id>", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱", "sub": "app"}`. 응답 · 규칙은 `install` 과 같습니다.
+`sub` 는 `update-upload` 와 같이 압축 파일 안의 기준 폴더입니다. `start` 는 그 기준 폴더 안의 경로입니다.
 설치하면 받아 둔 파일을 지웁니다. 실패하면 남겨 두어 다시 시도할 수 있습니다.
 
 ### POST /api/servers/:id/update-upload

@@ -10,6 +10,8 @@ type InstallUpload struct {
 	Start string `json:"start"`
 	// 프로세스 표시 이름 ( 선택 )
 	Label string `json:"label"`
+	// 압축 파일 안의 기준 폴더 ( 맨 위 폴더를 벗긴 경로, 예: app. 비우면 압축 파일 전체 )
+	Sub string `json:"sub"`
 }
 
 // UpdateUpload 는 받아 둔 압축 파일로 서버의 폴더를 바꾸는 요청이다.

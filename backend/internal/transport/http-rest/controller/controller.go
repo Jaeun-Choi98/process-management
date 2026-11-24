@@ -414,7 +414,7 @@ func handleDeleteUpload(uploads *processes.Uploads) gin.HandlerFunc {
 	}
 }
 
-// POST /api/servers/:id/install-upload {"upload": "...", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱"} : 받아 둔 압축 파일로 설치
+// POST /api/servers/:id/install-upload {"upload": "...", "path": "/home/ops/myapp", "start": "bin/start.sh", "label": "앱", "sub": "app"} : 받아 둔 압축 파일(sub 를 주면 그 안의 폴더)로 설치
 func handleInstallUpload(monitor *processes.Monitor, uploads *processes.Uploads) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body request.InstallUpload
@@ -430,7 +430,7 @@ func handleInstallUpload(monitor *processes.Monitor, uploads *processes.Uploads)
 		id := c.Param("id")
 		logger.Warnf("[REST] program install requested: %s %s from %s (start %s), remote: %s", id, body.Path, upload.Name, body.Start, c.ClientIP())
 		req := processes.InstallRequest{Target: body.Path, StartFile: body.Start, Label: body.Label}
-		src, err := upload.Source("")
+		src, err := upload.Source(body.Sub)
 		if err != nil {
 			respondError(c, err)
 			return

@@ -118,3 +118,9 @@ export const treeFromUpload = (upload: UploadInfo, name: string): LocalNode => {
   sort(root);
   return root;
 };
+
+/** 폴더 안의 모든 폴더 (상대 경로, 예: app, app/bin) */
+export const listDirs = (node: LocalNode, prefix = ''): { path: string; node: LocalNode }[] =>
+  node.children.flatMap(child =>
+    child.kind === 'dir' ? [{ path: prefix + child.name, node: child }, ...listDirs(child, `${prefix}${child.name}/`)] : []
+  );

@@ -251,6 +251,16 @@ func TestInstallAndUpdateFromArchiveOverSSH(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(app, "conf", "a.ini")); err != nil {
 		t.Error("nested files missing")
 	}
+
+	// 설치도 같은 압축 파일의 안쪽 app 을 기준으로 할 수 있다.
+	src, _ = up.Source("app")
+	other := filepath.Join(home, "other")
+	if _, err := monitor.InstallRemote(ctx, "local", InstallRequest{Target: other, StartFile: "start.sh"}, src); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(other, "start.sh")); err != nil || info.Mode()&0o100 == 0 {
+		t.Errorf("installed start.sh: %v %v", info, err)
+	}
 	if matches, _ := filepath.Glob(filepath.Join(home, ".*.update.*")); len(matches) > 0 {
 		t.Errorf("temporary folders left: %v", matches)
 	}
