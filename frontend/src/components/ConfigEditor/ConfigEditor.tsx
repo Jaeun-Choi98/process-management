@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_RESTART_DELAY_MS, DEFAULT_WATCH_INTERVAL_MS, validateProcessConfig } from '../../utils/schema';
+import Icon from '../Icon/Icon';
+import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_RESTART_DELAY_MS, DEFAULT_WATCH_INTERVAL_MS, migrateLegacyMatch, validateProcessConfig } from '../../utils/schema';
 import { ProcessConfig, ServerEntry } from '../../types/config';
 import './ConfigEditor.css';
 
@@ -20,7 +21,7 @@ type Section = 'groups' | 'servers' | 'processes';
 /**
  * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다. (autoRestart 는 'true' / '')
  * key 는 React 용이다. (id 는 편집되므로 key 로 쓸 수 없다)
- * 프로세스의 autoRestart · watchName · watchArgs 는 모니터링 화면에서 바꾸므로 열은 없지만,
+ * 프로세스의 실행 판단 조건(matchName · matchArgs · matchRegex)과 autoRestart 는 모니터링 화면에서 바꾸므로 열은 없지만,
  * 저장할 때 지워지지 않도록 행에 그대로 들고 있다.
  */
 type Row = Record<string, string>;
@@ -62,15 +63,14 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     section: 'processes',
     title: '프로세스',
     description:
-      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      '시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
       '로그 · INI 파일은 비워 두면 시작 스크립트 폴더 아래의 *.log(5단계) · *.ini(3단계)를 찾습니다. ' +
       '다른 곳을 보려면 패턴을 적습니다: 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로는 그대로. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않습니다. ' +
-      '자동 재시작과 감시 문자열은 모니터링 화면의 각 프로세스 [감시] 에서 바꿉니다.',
+      '실행 중인지 판단하는 조건과 자동 재시작은 저장한 뒤 모니터링 화면의 각 프로세스 [조건] 에서 정합니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
-      { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
       { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
       { field: 'logFiles', title: '로그 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.log', className: 'config-editor-col-wide' },
       { field: 'iniFiles', title: 'INI 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.ini', className: 'config-editor-col-wide' },
@@ -115,13 +115,13 @@ const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
     id: p.id,
     server: p.server,
     label: p.label ?? '',
-    match: p.match,
     logFiles: (p.logFiles ?? legacyPatterns(p).logFiles).join(', '),
     iniFiles: (p.iniFiles ?? legacyPatterns(p).iniFiles).join(', '),
     startScript: p.startScript ?? '',
     autoRestart: p.autoRestart ? 'true' : '',
-    watchName: p.watchName ?? '',
-    watchArgs: p.watchArgs ?? '',
+    matchName: p.matchName ?? '',
+    matchArgs: p.matchArgs ?? '',
+    matchRegex: p.matchRegex ?? '',
   })),
 });
 
@@ -153,7 +153,7 @@ const toRowMessage = (message: string, rowNumber: (section: Section, index: numb
     return n === null ? `${SECTION_TITLE[section]} (다른 그룹) ` : `${SECTION_TITLE[section]} ${n}번째 행 `;
   });
 
-/** ⚙ 설정: 그룹 · 서버 · 프로세스를 추가 · 삭제 · 수정 · 정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
+/** 설정: 그룹 · 서버 · 프로세스를 추가 · 삭제 · 수정 · 정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
 const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onClose }) => {
   const groupMode = scope !== 'all';
   /** 위쪽 숫자 칸 (빈 칸이면 기본값) */
@@ -205,13 +205,13 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
         id: r.id.trim(),
         server: r.server,
         label: text(r.label),
-        match: r.match.trim(),
         logFiles: patternList(r.logFiles),
         iniFiles: patternList(r.iniFiles),
         startScript: text(r.startScript),
         autoRestart: r.autoRestart === 'true' || undefined,
-        watchName: text(r.watchName),
-        watchArgs: text(r.watchArgs),
+        matchName: text(r.matchName),
+        matchArgs: text(r.matchArgs),
+        matchRegex: text(r.matchRegex),
       })),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -280,13 +280,13 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
           id: `${prefix}-${n}`,
           server: prev.servers.find(r => !groupMode || r.group === scope)?.id ?? '',
           label: '',
-          match: '',
           logFiles: '',
           iniFiles: '',
           startScript: '',
           autoRestart: '',
-          watchName: '',
-          watchArgs: '',
+          matchName: '',
+          matchArgs: '',
+          matchRegex: '',
         },
       };
       return { ...prev, [section]: [...prev[section], { key: String(nextRowKey++), ...empty[section] }] };
@@ -302,7 +302,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
     let imported: unknown;
     let blocking: string[];
     try {
-      imported = JSON.parse(await selected.text());
+      // 예전 형식(match · watchName · watchArgs)이면 실행 판단 조건 하나로 바꿔 읽는다.
+      imported = migrateLegacyMatch(JSON.parse(await selected.text()));
       const result = validateProcessConfig(imported);
       blocking = result.ok ? [] : result.errors.filter(error => !error.includes('.password:'));
     } catch (err) {
@@ -374,7 +375,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
               </>
             )}
             <button className="btn-icon" onClick={onClose} title="닫기 (Esc)">
-              ✕
+              <Icon name="close" />
             </button>
           </div>
         </header>
@@ -433,10 +434,10 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                         <tr key={row.key}>
                           <td className="config-editor-col-order">
                             <button className="btn-icon" onClick={() => moveRow(section, i, above)} disabled={above < 0} title="위로">
-                              ▲
+                              <Icon name="chevron-up" />
                             </button>
                             <button className="btn-icon" onClick={() => moveRow(section, i, below)} disabled={below < 0} title="아래로">
-                              ▼
+                              <Icon name="chevron-down" />
                             </button>
                           </td>
                           {columns.map(({ field, type, placeholder, className }) => {
@@ -477,7 +478,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                           onClick={() => setRows(prev => ({ ...prev, [section]: prev[section].filter(r => r.key !== row.key) }))}
                           title="삭제"
                         >
-                          ✕
+                          <Icon name="close" />
                         </button>
                       </td>
                     </tr>

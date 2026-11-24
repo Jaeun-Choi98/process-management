@@ -137,11 +137,25 @@
 .server-card-badge {
   flex-shrink: 0;
   padding: 0 5px;
+  font-family: inherit;
   font-size: 0.6rem;
   color: var(--error);
   letter-spacing: 0.05em;
+  background: none;
   border: 1px solid var(--error);
   border-radius: var(--radius);
+}
+
+/* 실행 판단 조건이 없는 프로세스 (눌러서 등록) */
+.server-card-badge-muted {
+  color: var(--text-muted);
+  cursor: pointer;
+  border-color: var(--border);
+}
+
+.server-card-badge-muted:hover {
+  color: var(--text);
+  border-color: var(--text);
 }
 
 .server-card-mono {
@@ -198,6 +212,7 @@
   border: none;
 }
 .server-card-watch:hover { text-decoration: underline; }
+.server-card-watch .icon { margin-right: 4px; }
 .server-card-watch-ok { color: var(--success); }
 .server-card-watch-warn { color: var(--warning); }
 .server-card-watch-error { color: var(--error); }

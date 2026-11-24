@@ -123,10 +123,11 @@ func TestMonitorOverSSH(t *testing.T) {
 			{ID: "local", Group: "uw", Host: host, Port: port, User: "ops", Password: "pw"},
 			{ID: "wrong-pw", Group: "uw", Host: host, Port: port, User: "ops", Password: "nope"},
 		},
-		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogFiles: []string{logDir + "/*.log", logDir + "/*/*.log"}, IniFiles: []string{configDir + "/*.ini"}, StartScript: script,
-			AutoRestart: true, WatchName: "sleep", WatchArgs: marker},
+		Processes: []Process{{ID: "app", Server: "local", MatchName: "sleep", MatchArgs: marker, LogFiles: []string{logDir + "/*.log", logDir + "/*/*.log"}, IniFiles: []string{configDir + "/*.ini"}, StartScript: script,
+			AutoRestart: true},
 			// 패턴 없이 시작 스크립트만: 그 폴더(dir) 아래 *.log(5단계) · *.ini(3단계)를 찾는다.
-			{ID: "auto", Server: "local", Match: "^never-matches$", StartScript: script}},
+			// 실행 판단 조건이 없으면 중지 · 재시작할 수 없다.
+			{ID: "auto", Server: "local", StartScript: script}},
 	})
 	if _, err := store.Save(body); err != nil {
 		t.Fatal(err)
@@ -279,14 +280,18 @@ func TestMonitorOverSSH(t *testing.T) {
 	}
 
 	// 자동 재시작: 화면에서 중지했으면 다시 시작하지 않는다.
-	watch := func() *WatchStatus {
+	// 자동 재시작 상태와, 같은 조건으로 찾은 실행 여부
+	watch := func() (*WatchStatus, bool) {
 		t.Helper()
 		monitor.Reset()
 		servers, _ := monitor.GroupStatus(ctx, "uw")
-		return servers[0].Processes[0].Watch
+		return servers[0].Processes[0].Watch, len(servers[0].Processes[0].Instances) > 0
+	}
+	if _, err := monitor.Control(ctx, "auto", "stop"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("stop without condition: %v", err)
 	}
 	monitor.watchOnce(ctx)
-	if w := watch(); w == nil || w.Healthy || !w.Paused || w.Restarts != 0 {
+	if w, up := watch(); w == nil || up || !w.Paused || w.Restarts != 0 {
 		t.Fatalf("paused watch = %+v", w)
 	}
 
@@ -298,7 +303,7 @@ func TestMonitorOverSSH(t *testing.T) {
 	exec.Command("pkill", "-f", "^sleep "+marker+"$").Run()
 	waitFor(false)
 	monitor.watchOnce(ctx)
-	if w := watch(); w.Healthy || w.Paused || w.Restarts != 0 {
+	if w, up := watch(); up || w.Paused || w.Restarts != 0 {
 		t.Fatalf("restarted within restartDelay: %+v", w)
 	}
 	monitor.mu.Lock()
@@ -306,19 +311,24 @@ func TestMonitorOverSSH(t *testing.T) {
 	monitor.mu.Unlock()
 	monitor.watchOnce(ctx)
 	waitFor(true)
-	if w := watch(); !w.Healthy || w.Restarts != 1 || w.LastRestartAt == nil || w.LastError != "" {
+	if w, up := watch(); !up || w.Restarts != 1 || w.LastRestartAt == nil || w.LastError != "" {
 		t.Fatalf("auto restart = %+v", w)
 	}
 
 	// 감시 조건 확인: 저장 전에 지금 맞는 프로세스를 본다.
-	if found, err := monitor.WatchTest(ctx, "app", "", "sleep "+marker); err != nil || len(found) != 1 {
+	if found, err := monitor.WatchTest(ctx, "app", "", "sleep "+marker, ""); err != nil || len(found) != 1 {
 		t.Errorf("watch test = %+v, %v", found, err)
 	}
-	if found, err := monitor.WatchTest(ctx, "app", "java", marker); err != nil || len(found) != 0 {
+	if found, err := monitor.WatchTest(ctx, "app", "java", marker, ""); err != nil || len(found) != 0 {
 		t.Errorf("watch test with wrong name = %+v, %v", found, err)
 	}
-	if _, err := monitor.WatchTest(ctx, "app", " ", ""); !isStatus(err, http.StatusBadRequest) {
-		t.Errorf("empty watch test: %v", err)
+	if found, err := monitor.WatchTest(ctx, "app", "", "", "^sleep "+marker+"$"); err != nil || len(found) != 1 {
+		t.Errorf("regex watch test = %+v, %v", found, err)
+	}
+	for _, bad := range [][3]string{{" ", "", ""}, {"sleep", "", "sleep"}, {"", "", "("}} {
+		if _, err := monitor.WatchTest(ctx, "app", bad[0], bad[1], bad[2]); !isStatus(err, http.StatusBadRequest) {
+			t.Errorf("watch test %q: %v", bad, err)
+		}
 	}
 }
 

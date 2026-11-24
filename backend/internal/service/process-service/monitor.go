@@ -48,7 +48,7 @@ type ProcessStatus struct {
 	ID string `json:"id"`
 	// 비어 있으면 실행 중이 아니다.
 	Instances []Instance `json:"instances"`
-	// 감시 프로세스(watchName)를 등록한 경우에만 들어간다.
+	// 자동 재시작을 켠 경우에만 들어간다.
 	Watch *WatchStatus `json:"watch,omitempty"`
 }
 
@@ -148,8 +148,8 @@ func (m *Monitor) GroupStatus(ctx context.Context, slug string) ([]ServerStatus,
 					if p.Server == server.ID {
 						status.Processes = append(status.Processes, ProcessStatus{
 							ID:        p.ID,
-							Instances: matchInstances(p, snapshot.rows),
-							Watch:     m.watchStatus(p, snapshot.rows),
+							Instances: findInstances(p, snapshot.rows),
+							Watch:     m.watchStatus(p),
 						})
 					}
 				}
@@ -171,6 +171,9 @@ func (m *Monitor) Control(ctx context.Context, processID, action string) (string
 	}
 	if action != "start" && action != "stop" && action != "restart" {
 		return "", &UserError{http.StatusNotFound, fmt.Sprintf("알 수 없는 동작입니다: %s", action)}
+	}
+	if action != "start" && !process.hasCondition() {
+		return "", &UserError{http.StatusBadRequest, "실행 판단 조건이 없어 중지할 프로세스를 찾을 수 없습니다 (조건 창에서 등록하세요)"}
 	}
 	if action != "stop" && process.StartScript == "" {
 		return "", &UserError{http.StatusBadRequest, "시작 스크립트가 등록되지 않았습니다"}
@@ -198,7 +201,7 @@ func (m *Monitor) Control(ctx context.Context, processID, action string) (string
 
 	running := func() ([]Instance, error) {
 		snapshot := m.ps(ctx, server, true)
-		return matchInstances(process, snapshot.rows), snapshot.err
+		return findInstances(process, snapshot.rows), snapshot.err
 	}
 	instances, err := running()
 	if err != nil {
@@ -325,22 +328,6 @@ func parsePS(output string) []Instance {
 		rows = append(rows, Instance{PID: pid, CPU: cpu, Mem: mem, Elapsed: match[4], Command: strings.TrimSpace(match[5])})
 	}
 	return rows
-}
-
-// matchInstances 는 명령줄이 프로세스의 match 정규식에 맞는 행을 고른다.
-// 상태 확인용으로 실행한 ps 자체와 PID 1 은 제외한다.
-func matchInstances(process Process, rows []Instance) []Instance {
-	pattern, err := regexp.Compile(process.Match)
-	if err != nil {
-		return []Instance{}
-	}
-	instances := []Instance{}
-	for _, row := range rows {
-		if row.PID > 1 && !strings.Contains(row.Command, psArgs) && pattern.MatchString(row.Command) {
-			instances = append(instances, row)
-		}
-	}
-	return instances
 }
 
 func pidList(instances []Instance) string {

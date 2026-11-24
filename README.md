@@ -11,7 +11,7 @@
 
 ## 설계 원칙
 
-- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 · INI 파일 패턴 ·
+- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 조건(`matchName` · `matchArgs` 또는 `matchRegex`)과 로그 · INI 파일 패턴 ·
   시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `ls`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
   실행하며, 설정의 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
 - **파일은 시작 스크립트 폴더 기준으로**: 폴더를 둘러보는 기능은 없고, 정해진 패턴에 맞는 파일만 보입니다.
@@ -24,13 +24,16 @@
 - **INI 는 안전하게 덮어쓰기**: INI 파일 패턴에 맞는 파일만 열고 고칩니다. 저장할 때는 읽었던 내용의 hash 를
   같이 보내 그 사이 다른 곳에서 바뀌었으면 거부하고, 받은 내용을 임시 파일에 다 쓴 뒤 크기를 확인하고 나서야 원본을 바꿉니다.
   이전 내용은 `<파일>.bak` 에 남기고, 원본은 내용만 바꿔 권한 · 소유자를 유지합니다. UTF-8 이 아닌 파일은 열지 않습니다.
-- **자동 재시작은 정확한 비교로**: 모니터링 화면의 `감시` 창에서 프로세스별로 켜고 끕니다. 화면 표시용 `match`(정규식)와 따로, 감시 프로세스를 실행 파일 이름(`watchName`,
-  정확히 일치)과 명령줄에 들어 있어야 할 문자열(`watchArgs`)로 적습니다. 둘 중 하나만 적어도 되고, 둘 다 적으면
-  한 프로세스가 둘 다 만족해야 합니다. 감시 프로세스가 `ps` 에 없으면 시작
+- **실행 판단 조건은 하나**: 상태 표시(PID · STOPPED), 중지 대상, 자동 재시작이 모두 같은 조건으로 프로세스를 찾습니다.
+  그래서 화면에는 실행 중인데 자동 재시작이 또 띄우거나, 다른 프로세스를 중지하는 일이 없습니다. 조건은 모니터링 화면의
+  `조건` 창에서 정하며, 실행 파일 이름(`matchName`, 정확히 일치)과 명령줄에 들어 있어야 할 문자열(`matchArgs`)로 적는 것을
+  권장합니다. 둘 중 하나만 적어도 되고, 둘 다 적으면 한 프로세스가 둘 다 만족해야 합니다. 이것으로 구분할 수 없을 때만
+  정규식(`matchRegex`)을 씁니다.
+- **자동 재시작**: `조건` 창에서 프로세스별로 켜고 끕니다. 조건에 맞는 프로세스가 `ps` 에 없으면 시작
   스크립트를 실행하고, 재시작 대기(`restartDelayMs`, 기본 30초) 뒤에도 없으면 횟수 제한 없이 다시 실행합니다. 화면에서 **중지**하면 다시
   시작할 때까지 자동 재시작을 멈춥니다. (이 '멈춤' 과 재시작 횟수는 Go 서버 메모리에만 있어서, Go 서버를 다시 켜면
   풀립니다. 오래 꺼 둘 프로세스는 설정에서 자동 재시작을 끄세요)
-- **비밀번호는 쓰기 전용**: ⚙ 설정에서 입력한 SSH 비밀번호는 Go 서버의 설정 파일(0600)에만 저장되고,
+- **비밀번호는 쓰기 전용**: 설정에서 입력한 SSH 비밀번호는 Go 서버의 설정 파일(0600)에만 저장되고,
   조회 API 는 `hasPassword` 만 돌려줍니다. 비워 두고 저장하면 기존 비밀번호를 유지하되, host · port · user 가
   바뀌면 다시 입력해야 합니다. (저장된 비밀번호를 다른 서버로 보낼 수 없도록)
 - **호스트 키 확인**: 처음 접속한 서버의 호스트 키를 `known_hosts` 에 기록하고, 이후 키가 다르면 접속하지
@@ -38,7 +41,7 @@
 - **서버 부하 제한**: 상태 확인은 서버당 `ps` 한 번으로 그 서버의 모든 프로세스를 판단하고, 여러 사람이 보고
   있어도 서버마다 2초에 한 번만 실행합니다. SSH 연결은 열어 두고 재사용합니다.
 - **경로 라우팅**: `/all` 은 전체 그룹, `/<그룹 slug>` 는 그 그룹만 보여주고 상태도 그 그룹만 확인합니다.
-  그룹 주소에서는 상단 탭에도 그 그룹만 보이고, ⚙ 설정도 그 그룹의 서버 · 프로세스만 편집합니다.
+  그룹 주소에서는 상단 탭에도 그 그룹만 보이고, 설정도 그 그룹의 서버 · 프로세스만 편집합니다.
   (그룹 · 확인 주기 · 가져오기/내보내기는 `/all` 에서만. 다른 그룹의 설정은 손대지 않고 그대로 저장합니다)
   주소를 나눠 보여줄 뿐 접근 제한은 아닙니다. (`/all` 로 들어가면 전체가 보입니다)
 - **로그 내보내기**: 로그 화면에서 지금 보이는 줄만(마지막 N줄 · 걸러진 줄) 브라우저에서 바로 파일로 만들거나,
@@ -50,7 +53,7 @@
 
 ## 설정 (`processes.json`)
 
-⚙ 설정 화면에서 편집하며, Go 서버의 `env.ini` `[PROCESSES] FILE` (기본 `./data/processes.json`)에 저장됩니다.
+설정 화면에서 편집하며, Go 서버의 `env.ini` `[PROCESSES] FILE` (기본 `./data/processes.json`)에 저장됩니다.
 
 ```json
 {
@@ -66,12 +69,11 @@
       "id": "shelter",
       "server": "uw-app1",
       "label": "Shelter",
-      "match": "java .*shelter\\.jar",
+      "matchName": "java",
+      "matchArgs": "/opt/shelter/shelter.jar",
       "logFiles": ["logs/*.log", "/var/log/shelter/*.log"],
       "startScript": "/opt/shelter/start.sh",
-      "autoRestart": true,
-      "watchName": "java",
-      "watchArgs": "/opt/shelter/shelter.jar"
+      "autoRestart": true
     }
   ]
 }
@@ -88,21 +90,27 @@
 | `servers[].host` / `port` / `user` / `password` | ✓ (port 제외) | SSH 접속 정보. port 생략 시 22 |
 | `servers[].label` | | 표시 이름 (생략 시 id) |
 | `processes[].id` / `server` | ✓ | 고유 id / 서버 id |
-| `processes[].match` | ✓ | `ps` 명령줄에 대한 정규식(Go RE2). 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
+| `processes[].matchName` | | 실행 판단 조건: 실행 파일 이름. `ps` 명령줄 첫 단어의 파일 이름과 정확히 같아야 합니다 (`/usr/bin/java ...` → `java`, `#!/bin/sh` 스크립트 → `sh`). 비우면 보지 않습니다 |
+| `processes[].matchArgs` | | 실행 판단 조건: 명령줄에 들어 있어야 하는 문자열 (정규식 아님). 비우면 보지 않습니다. 이것만 쓸 때는 `vi` · `tail` 처럼 같은 경로를 연 다른 프로그램도 맞으므로, 그 프로세스만 가진 문자열로 적으세요 |
+| `processes[].matchRegex` | | 실행 판단 조건: 명령줄 전체에 대한 정규식(Go RE2). `matchName` · `matchArgs` 와 함께 쓸 수 없습니다. 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
 | `processes[].logFiles` | | 로그 파일 패턴 목록 (선택, 최대 10개). 비우면 시작 스크립트 폴더 아래 5단계까지의 `*.log`. 상대 경로는 시작 스크립트 폴더 기준. 설정 창에서는 쉼표로 나눠 적습니다 |
 | `processes[].iniFiles` | | INI 파일 패턴 목록 (선택, 최대 10개, `.ini` 로 끝나야 함). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini` |
 | `processes[].startScript` | | 시작 · 재시작 때 인자 없이 실행할 스크립트의 절대 경로. 스크립트가 있는 폴더에서 `nohup` 으로 실행하고 출력은 버리므로, 로그는 스크립트가 직접 남겨야 합니다 |
 | `processes[].label` | | 표시 이름 (생략 시 id) |
-| `processes[].autoRestart` | | 이것과 `watchName` · `watchArgs` 는 ⚙ 설정이 아니라 모니터링 화면의 `감시` 창에서 바꿉니다. `true` 면 감시 프로세스가 없을 때 시작 스크립트를 자동 실행합니다. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
-| `processes[].watchName` | | 감시 프로세스의 실행 파일 이름. `ps` 명령줄 첫 단어의 파일 이름과 정확히 같아야 합니다 (`/usr/bin/java ...` → `java`, `#!/bin/sh` 스크립트 → `sh`). 비우면 보지 않습니다 |
-| `processes[].watchArgs` | | 감시 프로세스의 명령줄에 들어 있어야 하는 문자열 (정규식 아님). 비우면 보지 않습니다. 이것만 쓸 때는 `vi` · `tail` 처럼 같은 경로를 연 다른 프로그램도 맞으므로, 그 프로세스만 가진 문자열로 적으세요 |
+| `processes[].autoRestart` | | `true` 면 조건에 맞는 프로세스가 없을 때 시작 스크립트를 자동 실행합니다. `startScript` 와 실행 판단 조건 필요 |
+
+- 실행 판단 조건(`matchName` · `matchArgs` · `matchRegex`)과 `autoRestart` 는 설정 창이 아니라 모니터링 화면의 `조건` 창에서 바꿉니다.
+  설정 창에서 프로세스를 추가하면 조건이 없는 상태(`조건 없음`)로 보이며, 그때는 상태를 확인하지 않고 중지 · 재시작할 수 없습니다.
 
 - 배열 순서가 화면 표시 순서입니다.
-- 저장할 때 설정 창을 연 시점의 `version`(파일 내용의 hash)을 같이 보내, 그 사이 `감시` 창 · 다른 사용자 · 직접 수정으로
+- 저장할 때 설정 창을 연 시점의 `version`(파일 내용의 hash)을 같이 보내, 그 사이 `조건` 창 · 다른 사용자 · 직접 수정으로
   파일이 바뀌었으면 덮어쓰지 않고 거부합니다(409). 설정 창은 열 때마다 최신 설정을 다시 읽습니다.
 - 규칙은 프론트(`frontend/src/utils/schema.ts`)와 Go 서버(`backend/internal/service/process-service/config.go`)가 같은 내용으로 검사합니다.
-- 중지는 match 로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
-- 예전 설정은 읽을 때 패턴으로 바뀌고, 다음 저장 때 패턴으로 저장됩니다.
+- 중지는 실행 판단 조건으로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
+- 예전 설정은 읽을 때 새 형식으로 바뀌고, 다음 저장 때 새 형식으로 저장됩니다. (가져오기도 같습니다)
+  - `logFile` · `logDir` · `configDir` → `logFiles` · `iniFiles` 패턴
+  - `match` · `watchName` · `watchArgs` → 실행 판단 조건 하나. 감시 조건(`watchName` · `watchArgs`)이 있으면 그것을, 없으면 `match` 를 `matchRegex` 로 씁니다.
+    두 조건이 달랐던 프로세스는 상태 표시가 감시 조건 기준으로 바뀌므로 화면에서 한 번 확인하세요.
   `logFile: /a/app.log` → `[/a/app.log]`, `logDir: /a/logs` → `[/a/logs/*, /a/logs/*/*]`, `configDir: /a/conf` → `[/a/conf/*.ini, /a/conf/*/*.ini]`
 
 ### 사이트 안내문 (config/README.md, config/API.md)
@@ -162,10 +170,10 @@ frontend/src/
   components/
     Header/                  그룹 탭 (/all: 전체 + 모든 그룹, /uw: 그 그룹만)
     StatusSidebar/           그룹 · 서버 상태 사이드바 (클릭 시 카드로 이동)
-    ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 자동 재시작 상태 + 로그 · INI · 감시 · 시작 · 중지 버튼
+    ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 자동 재시작 상태 + 로그 · INI · 조건 · 시작 · 중지 버튼
     LogViewer/               패턴에 맞는 로그 · INI 파일 목록 → 로그 보기 (줄 수, 필터, 자동 새로고침) 또는 INI 편집
     IniEditor/               INI 파일 편집 · 저장 (CRLF 유지, 동시 수정 감지)
-    WatchEditor/             자동 재시작 · 감시 조건 변경, 지금 맞는 프로세스 확인
+    WatchEditor/             '조건' 창: 실행 판단 조건 · 자동 재시작 변경, 지금 맞는 프로세스 확인
     ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기 (그룹 주소에서는 그 그룹만)
     MarkdownPanel/           config/README.md · API.md 를 접이식 패널로 표시
   pages/Dashboard.tsx        그룹 → 서버 → 프로세스 화면 구성, 검색, 사이드바 이동
@@ -186,7 +194,8 @@ backend/
       remote.go              SSH 연결 재사용 · 명령 실행 · known_hosts 확인
       monitor.go             ps 로 상태 확인, kill · 시작 스크립트로 제어
       files.go               패턴에 맞는 로그 · INI 파일 목록(ls), 로그 tail, INI 읽기 · 쓰기, 경로 확인
-      watchdog.go            자동 재시작 감시 (watchName · watchArgs), 감시 조건 확인
+      match.go               실행 판단 조건 (상태 · 중지 · 자동 재시작 공통), 예전 match · watch 설정 변환
+      watchdog.go            자동 재시작, 저장 전 조건 확인
     transport/http-rest/
       rest.go                HTTP 서버 (미들웨어 · SPA 핸들러 연결, 시작 · 종료)
       controller/            /api 경로 등록과 핸들러

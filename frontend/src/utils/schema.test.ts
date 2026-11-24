@@ -1,4 +1,4 @@
-import { checkFilePattern, effectivePatterns, validateProcessConfig } from './schema';
+import { checkFilePattern, effectivePatterns, migrateLegacyMatch, validateProcessConfig } from './schema';
 
 const valid = {
   pollIntervalMs: 5000,
@@ -8,13 +8,12 @@ const valid = {
     {
       id: 'shelter',
       server: 'uw-app1',
-      match: 'java .*shelter\\.jar',
+      matchName: 'java',
+      matchArgs: '/opt/shelter/shelter.jar',
       logFiles: ['/opt/shelter/logs/*.log', '/opt/shelter/logs/*/*.log'],
       iniFiles: ['/opt/shelter/conf/*.ini'],
       startScript: '/opt/shelter/start.sh',
       autoRestart: true,
-      watchName: 'java',
-      watchArgs: '/opt/shelter/shelter.jar',
     },
   ],
 };
@@ -31,8 +30,10 @@ test('collects every error with its location', () => {
     groups: [{ slug: 'uw', name: '의왕' }, { slug: 'all', name: 'x' }, { slug: 'uw', name: '' }],
     servers: [{ id: 'a', group: 'nope', host: 'bad host', port: 0, user: '' }],
     processes: [
-      { id: 'p', server: 'zzz', match: '(', logFiles: ['/home/*'], startScript: 'start.sh; rm -rf /', watchName: '/usr/bin/java' },
-      { id: 'q', server: 'zzz', match: 'java', autoRestart: true },
+      { id: 'p', server: 'zzz', matchName: '/usr/bin/java', matchRegex: '(', logFiles: ['/home/*'], startScript: 'start.sh; rm -rf /' },
+      { id: 'q', server: 'zzz', autoRestart: true },
+      // 조건 없이 등록만 한 프로세스는 허용한다.
+      { id: 'r', server: 'a' },
     ],
   });
   expect(result.ok).toBe(false);
@@ -50,12 +51,13 @@ test('collects every error with its location', () => {
     'servers[0].user',
     'servers[0].password',
     'processes[0].server',
-    'processes[0].match',
+    'processes[0].matchRegex',
+    'processes[0].matchRegex',
+    'processes[0].matchName',
     'processes[0].startScript',
     'processes[0].logFiles',
-    'processes[0].watchName',
     'processes[1].server',
-    'processes[1].watchArgs',
+    'processes[1].autoRestart',
     'processes[1].startScript',
   ]);
 });
@@ -94,9 +96,30 @@ test('file patterns default to the start script folder and resolve relative path
   const config = (process: object) => ({
     groups: [{ slug: 'uw', name: '의왕' }],
     servers: [{ id: 's', group: 'uw', host: 'h', user: 'u', hasPassword: true }],
-    processes: [{ id: 'p', server: 's', match: 'x', ...process }],
+    processes: [{ id: 'p', server: 's', matchRegex: 'x', ...process }],
   });
   expect(validateProcessConfig(config({ startScript: '/opt/shelter/start.sh', logFiles: ['logs/*.log'] })).ok).toBe(true);
   expect(validateProcessConfig(config({ logFiles: ['logs/*.log'] })).ok).toBe(false);
   expect(validateProcessConfig(config({ startScript: '/opt/shelter/start.sh', logFiles: ['../etc/*.log'] })).ok).toBe(false);
+});
+
+test('old config files are converted to a single condition (same as the Go server)', () => {
+  const migrated = migrateLegacyMatch({
+    groups: [],
+    servers: [],
+    processes: [
+      { id: 'a', server: 's', match: 'java .*a', autoRestart: true, watchName: 'java', watchArgs: 'a.jar' },
+      { id: 'b', server: 's', match: 'java .*b' },
+      { id: 'c', server: 's', matchArgs: 'c.jar' },
+    ],
+  });
+  expect(migrated).toEqual({
+    groups: [],
+    servers: [],
+    processes: [
+      { id: 'a', server: 's', autoRestart: true, matchName: 'java', matchArgs: 'a.jar' },
+      { id: 'b', server: 's', matchRegex: 'java .*b' },
+      { id: 'c', server: 's', matchArgs: 'c.jar' },
+    ],
+  });
 });

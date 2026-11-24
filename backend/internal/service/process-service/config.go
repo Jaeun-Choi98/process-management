@@ -15,7 +15,7 @@ import (
 	"sync"
 )
 
-// Config 는 화면의 ⚙ 설정에서 편집하는 설정 파일(processes.json)의 구조. 프론트의 frontend/src/types/config.ts 와 맞춘다.
+// Config 는 화면의 설정에서 편집하는 설정 파일(processes.json)의 구조. 프론트의 frontend/src/types/config.ts 와 맞춘다.
 //
 //	그룹(groups) ─┬─ 서버(servers, group = 그룹 slug) ─┬─ 프로세스(processes, server = 서버 id)
 type Config struct {
@@ -57,8 +57,16 @@ type Process struct {
 	ID     string `json:"id"`
 	Server string `json:"server"`
 	Label  string `json:"label,omitempty"`
-	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
-	Match string `json:"match"`
+	// 실행 판단 조건. ps 에서 이 조건에 맞는 프로세스를 이 항목의 실행 인스턴스로 본다. (match.go)
+	// 상태 표시 · 중지 · 자동 재시작이 모두 이 조건 하나를 쓴다. 모니터링 화면의 '조건' 창에서 바꾼다. (Store.UpdateWatch)
+	//
+	//	이름 · 문자열 방식: matchName(실행 파일 이름, 정확히 같음) · matchArgs(명령줄에 들어 있는 문자열) 중 하나 이상
+	//	정규식 방식:       matchRegex(명령줄 전체에 대한 정규식). 이름 · 문자열과 함께 쓸 수 없다.
+	//
+	// 모두 비어 있으면 상태를 확인하지 않는다. (설정에서 막 추가한 프로세스)
+	MatchName  string `json:"matchName,omitempty"`
+	MatchArgs  string `json:"matchArgs,omitempty"`
+	MatchRegex string `json:"matchRegex,omitempty"`
 	// 로그 파일 패턴 (선택). 비워 두면 시작 스크립트 폴더 아래 5단계까지의 *.log 를 찾는다. (EffectivePatterns)
 	// 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로(/var/log/app/*.log)는 그대로 쓴다.
 	// 화면에는 이 패턴에 맞는 파일만 보이고, tail 로 끝부분을 읽는다.
@@ -68,14 +76,9 @@ type Process struct {
 	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
 	StartScript string `json:"startScript,omitempty"`
 
-	// 자동 재시작. 켜 두면 감시 프로세스가 ps 에 없을 때 시작 스크립트를 실행한다. (watchdog.go 참고)
-	// 아래 세 값은 모니터링 화면에서 프로세스별로 바꾼다. (Store.UpdateWatch)
+	// 자동 재시작. 켜 두면 실행 판단 조건에 맞는 프로세스가 ps 에 없을 때 시작 스크립트를 실행한다. (watchdog.go)
+	// 실행 판단 조건과 함께 모니터링 화면에서 바꾼다.
 	AutoRestart bool `json:"autoRestart,omitempty"`
-	// 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java, 비워 두면 문자열만 본다)
-	WatchName string `json:"watchName,omitempty"`
-	// 감시 프로세스의 명령줄에 들어 있어야 하는 문자열 (정규식 아님, 비워 두면 이름만 본다) (예: /opt/app/app.jar)
-	// 이름 · 문자열 중 하나 이상 필요하고, 둘 다 적으면 한 프로세스가 둘 다 만족해야 한다.
-	WatchArgs string `json:"watchArgs,omitempty"`
 }
 
 func (s Server) addr() string {
@@ -94,7 +97,7 @@ var (
 	// 파일 패턴: 경로 문자에 셸 와일드카드 * ? 만 더 허용한다. (명령에 따옴표 없이 넣어 셸이 펼치게 하므로)
 	filePatternChars = regexp.MustCompile(`^/[A-Za-z0-9._/*?-]+$`)
 	// 실행 파일 이름 (경로 · 공백 없이)
-	watchNamePattern = regexp.MustCompile(`^[^/\s]+$`)
+	matchNamePattern = regexp.MustCompile(`^[^/\s]+$`)
 	// 화면 · 서버의 다른 경로와 겹치는 slug
 	reservedSlugs = map[string]bool{"all": true, "api": true, "config": true, "static": true, "log-config": true}
 )
@@ -175,8 +178,16 @@ func (c *Config) Validate() error {
 		if !serverIDs[p.Server] {
 			add("%s.server: 등록된 서버가 아닙니다", at)
 		}
-		if _, err := regexp.Compile(p.Match); p.Match == "" || err != nil {
-			add("%s.match: 올바른 정규식이 필요합니다", at)
+		if p.MatchRegex != "" {
+			if _, err := regexp.Compile(p.MatchRegex); err != nil {
+				add("%s.matchRegex: 올바른 정규식이 필요합니다", at)
+			}
+			if p.MatchName != "" || p.MatchArgs != "" {
+				add("%s.matchRegex: 정규식은 실행 이름 · 명령줄 문자열과 함께 쓸 수 없습니다", at)
+			}
+		}
+		if p.MatchName != "" && !matchNamePattern.MatchString(p.MatchName) {
+			add("%s.matchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)", at)
 		}
 		// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
 		if p.StartScript != "" && (!pathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript) {
@@ -196,11 +207,8 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
-		if p.WatchName != "" && !watchNamePattern.MatchString(p.WatchName) {
-			add("%s.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)", at)
-		}
-		if p.AutoRestart && p.WatchName == "" && p.WatchArgs == "" {
-			add("%s.watchArgs: 자동 재시작에는 감시 이름이나 감시 문자열이 필요합니다", at)
+		if p.AutoRestart && !p.hasCondition() {
+			add("%s.autoRestart: 자동 재시작에는 실행 판단 조건이 필요합니다", at)
 		}
 		if p.AutoRestart && p.StartScript == "" {
 			add("%s.startScript: 자동 재시작에는 시작 스크립트가 필요합니다", at)
@@ -244,6 +252,7 @@ func (s *Store) load() (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", s.path, err)
 	}
 	migrateLogFile(data, &c)
+	migrateMatch(data, &c)
 	c.Version = contentHash(string(data))
 	return &c, nil
 }
@@ -291,7 +300,7 @@ func (p Process) EffectivePatterns(root string) ([]string, string) {
 	}
 	if len(explicit) == 0 {
 		if p.StartScript == "" {
-			return nil, "시작 스크립트가 등록되지 않아 " + ext + " 파일을 찾을 폴더가 없습니다 (⚙ 설정에서 시작 스크립트나 패턴을 적어 주세요)"
+			return nil, "시작 스크립트가 등록되지 않아 " + ext + " 파일을 찾을 폴더가 없습니다 (설정에서 시작 스크립트나 패턴을 적어 주세요)"
 		}
 		base := path.Dir(p.StartScript)
 		var patterns []string
@@ -300,7 +309,7 @@ func (p Process) EffectivePatterns(root string) ([]string, string) {
 		}
 		// 시작 스크립트가 /opt/start.sh 처럼 얕은 곳에 있으면 /opt 아래 전체를 훑게 되므로 자동으로 찾지 않는다.
 		if problem := checkFilePattern(patterns[0], root == RootINI); problem != "" {
-			return nil, fmt.Sprintf("시작 스크립트 폴더(%s)가 너무 얕아 자동으로 찾지 않습니다 (⚙ 설정에서 패턴을 적어 주세요)", base)
+			return nil, fmt.Sprintf("시작 스크립트 폴더(%s)가 너무 얕아 자동으로 찾지 않습니다 (설정에서 패턴을 적어 주세요)", base)
 		}
 		return patterns, ""
 	}
@@ -426,14 +435,15 @@ func (s *Store) Save(body []byte) (*Config, error) {
 	return &next, nil
 }
 
-// WatchUpdate 는 모니터링 화면에서 바꾸는 프로세스 하나의 자동 재시작 설정이다.
+// WatchUpdate 는 모니터링 화면의 '조건' 창에서 바꾸는 프로세스 하나의 실행 판단 조건과 자동 재시작이다.
 type WatchUpdate struct {
 	AutoRestart bool   `json:"autoRestart"`
-	WatchName   string `json:"watchName"`
-	WatchArgs   string `json:"watchArgs"`
+	MatchName   string `json:"matchName"`
+	MatchArgs   string `json:"matchArgs"`
+	MatchRegex  string `json:"matchRegex"`
 }
 
-// UpdateWatch 는 프로세스 하나의 자동 재시작 설정만 바꿔 저장하고, 저장한 설정(비밀번호 포함)을 돌려준다.
+// UpdateWatch 는 프로세스 하나의 실행 판단 조건 · 자동 재시작만 바꿔 저장하고, 저장한 설정(비밀번호 포함)을 돌려준다.
 func (s *Store) UpdateWatch(processID string, update WatchUpdate) (*Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -451,7 +461,8 @@ func (s *Store) UpdateWatch(processID string, update WatchUpdate) (*Config, erro
 		return nil, &UserError{http.StatusNotFound, fmt.Sprintf("'%s' 프로세스가 없습니다", processID)}
 	}
 	p := &config.Processes[index]
-	p.AutoRestart, p.WatchName, p.WatchArgs = update.AutoRestart, strings.TrimSpace(update.WatchName), strings.TrimSpace(update.WatchArgs)
+	p.AutoRestart = update.AutoRestart
+	p.MatchName, p.MatchArgs, p.MatchRegex = strings.TrimSpace(update.MatchName), strings.TrimSpace(update.MatchArgs), strings.TrimSpace(update.MatchRegex)
 
 	// 이 프로세스의 문제만 "processes[3]." 을 떼고 알려준다. (다른 항목의 문제는 설정 화면에서 고칠 일이므로 막지 않는다)
 	if err := config.Validate(); err != nil {

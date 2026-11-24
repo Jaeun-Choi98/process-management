@@ -1,4 +1,4 @@
-import { ProcessConfig } from '../types/config';
+import { ProcessConfig, ProcessEntry } from '../types/config';
 
 export const DEFAULT_POLL_INTERVAL_MS = 5000;
 export const DEFAULT_WATCH_INTERVAL_MS = 10000;
@@ -38,12 +38,12 @@ export function effectivePatterns(
   const explicit = root === 'ini' ? process.iniFiles : process.logFiles;
   if (!explicit || explicit.length === 0) {
     if (!process.startScript) {
-      return { patterns: [], problem: `시작 스크립트가 등록되지 않아 ${ext} 파일을 찾을 폴더가 없습니다 (⚙ 설정에서 시작 스크립트나 패턴을 적어 주세요)` };
+      return { patterns: [], problem: `시작 스크립트가 등록되지 않아 ${ext} 파일을 찾을 폴더가 없습니다 (설정에서 시작 스크립트나 패턴을 적어 주세요)` };
     }
     const base = dirname(process.startScript);
     const patterns = Array.from({ length: DEFAULT_PATTERN_DEPTH[root] }, (_, depth) => `${base}/${'*/'.repeat(depth)}*${ext}`);
     if (checkFilePattern(patterns[0], root === 'ini')) {
-      return { patterns: [], problem: `시작 스크립트 폴더(${base})가 너무 얕아 자동으로 찾지 않습니다 (⚙ 설정에서 패턴을 적어 주세요)` };
+      return { patterns: [], problem: `시작 스크립트 폴더(${base})가 너무 얕아 자동으로 찾지 않습니다 (설정에서 패턴을 적어 주세요)` };
     }
     return { patterns };
   }
@@ -71,6 +71,37 @@ export function checkFilePattern(pattern: unknown, ini: boolean): string {
   }
   if (ini && !segments[segments.length - 1].toLowerCase().endsWith('.ini')) return '.ini 로 끝나야 합니다';
   return '';
+}
+
+type Condition = Pick<ProcessEntry, 'matchName' | 'matchArgs' | 'matchRegex'>;
+
+/** 실행 판단 조건이 하나라도 있는지 (Go 서버의 Process.hasCondition) */
+export const hasCondition = (p: Condition) => Boolean(p.matchName || p.matchArgs || p.matchRegex);
+
+/** 실행 판단 조건을 사람이 읽는 문장으로 (카드의 마우스 설명 · 검색) */
+export function describeCondition(p: Condition): string {
+  if (p.matchRegex) return `명령줄이 정규식 ${p.matchRegex} 에 맞는 프로세스`;
+  const parts = [p.matchName && `실행 파일 이름이 ${p.matchName}`, p.matchArgs && `명령줄에 "${p.matchArgs}" 포함`].filter(Boolean);
+  return parts.length > 0 ? `${parts.join(', ')} 인 프로세스` : '실행 판단 조건 없음';
+}
+
+/**
+ * 예전 설정 파일(화면 표시용 match 정규식 + 자동 재시작용 watchName · watchArgs)을 가져올 때 조건 하나로 바꾼다.
+ * Go 서버의 migrateMatch 와 같은 규칙: 감시 조건이 있으면 그것을, 없으면 match 를 정규식 조건으로 쓴다.
+ */
+export function migrateLegacyMatch(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as { processes?: unknown }).processes)) return raw;
+  const config = raw as { processes: unknown[] };
+  return {
+    ...config,
+    processes: config.processes.map(item => {
+      if (typeof item !== 'object' || item === null) return item;
+      const { match, watchName, watchArgs, ...process } = item as Record<string, unknown> & { match?: unknown; watchName?: unknown; watchArgs?: unknown };
+      if (hasCondition(process as Condition)) return process;
+      if (watchName || watchArgs) return { ...process, matchName: watchName || undefined, matchArgs: watchArgs || undefined };
+      return match ? { ...process, matchRegex: match } : process;
+    }),
+  };
 }
 
 export type ValidationResult = { ok: true; config: ProcessConfig } | { ok: false; errors: string[] };
@@ -151,13 +182,22 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     else checkUnique(processIds, process.id, `${at}.id`);
     if (!serverIds.has(String(process.server))) errors.push(`${at}.server: 등록된 서버가 아닙니다`);
 
-    let validPattern = isText(process.match);
-    try {
-      if (validPattern) new RegExp(process.match as string);
-    } catch {
-      validPattern = false;
+    for (const field of ['matchName', 'matchArgs', 'matchRegex'] as const) {
+      if (process[field] !== undefined && typeof process[field] !== 'string') errors.push(`${at}.${field}: 문자열이어야 합니다`);
     }
-    if (!validPattern) errors.push(`${at}.match: 올바른 정규식이 필요합니다`);
+    if (isText(process.matchRegex)) {
+      try {
+        new RegExp(process.matchRegex);
+      } catch {
+        errors.push(`${at}.matchRegex: 올바른 정규식이 필요합니다`);
+      }
+      if (isText(process.matchName) || isText(process.matchArgs)) {
+        errors.push(`${at}.matchRegex: 정규식은 실행 이름 · 명령줄 문자열과 함께 쓸 수 없습니다`);
+      }
+    }
+    if (isText(process.matchName) && !/^[^/\s]+$/.test(process.matchName)) {
+      errors.push(`${at}.matchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)`);
+    }
 
     if (process.startScript !== undefined && !isSafePath(process.startScript)) {
       errors.push(`${at}.startScript: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
@@ -181,13 +221,8 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     if (process.autoRestart !== undefined && typeof process.autoRestart !== 'boolean') {
       errors.push(`${at}.autoRestart: true 또는 false 여야 합니다`);
     }
-    if (process.watchName !== undefined && !(typeof process.watchName === 'string' && /^[^/\s]+$/.test(process.watchName))) {
-      errors.push(`${at}.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)`);
-    }
-    if (process.watchArgs !== undefined && typeof process.watchArgs !== 'string') {
-      errors.push(`${at}.watchArgs: 문자열이어야 합니다`);
-    } else if (process.autoRestart === true && process.watchName === undefined && process.watchArgs === undefined) {
-      errors.push(`${at}.watchArgs: 자동 재시작에는 감시 이름이나 감시 문자열이 필요합니다`);
+    if (process.autoRestart === true && !hasCondition(process as Condition)) {
+      errors.push(`${at}.autoRestart: 자동 재시작에는 실행 판단 조건이 필요합니다`);
     }
     if (process.autoRestart === true && process.startScript === undefined) {
       errors.push(`${at}.startScript: 자동 재시작에는 시작 스크립트가 필요합니다`);

@@ -248,7 +248,7 @@ func handleWriteINI(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// PUT /api/processes/:id/watch {"autoRestart": true, "watchName": "", "watchArgs": "..."} : 모니터링 화면에서 자동 재시작 설정 변경
+// PUT /api/processes/:id/watch {"autoRestart": true, "matchName": "java", "matchArgs": "...", "matchRegex": ""} : 모니터링 화면에서 실행 판단 조건 · 자동 재시작 변경
 // 응답은 GET /api/config 와 같은 형식의 전체 설정이다.
 func handleUpdateWatch(store *processes.Store, monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -268,10 +268,10 @@ func handleUpdateWatch(store *processes.Store, monitor *processes.Monitor) gin.H
 	}
 }
 
-// GET /api/processes/:id/watch-test?name=java&args=app.jar : 감시 조건에 지금 맞는 프로세스 ( 저장 전 확인용 )
+// GET /api/processes/:id/watch-test?name=java&args=app.jar | ?regex=... : 실행 판단 조건에 지금 맞는 프로세스 ( 저장 전 확인용 )
 func handleWatchTest(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		instances, err := monitor.WatchTest(c.Request.Context(), c.Param("id"), c.Query("name"), c.Query("args"))
+		instances, err := monitor.WatchTest(c.Request.Context(), c.Param("id"), c.Query("name"), c.Query("args"), c.Query("regex"))
 		if err != nil {
 			respondError(c, err)
 			return

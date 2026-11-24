@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import Icon from '../components/Icon/Icon';
 import Header from '../components/Header/Header';
 import ConfigEditor from '../components/ConfigEditor/ConfigEditor';
 import LogViewer, { FileRoot } from '../components/LogViewer/LogViewer';
@@ -6,8 +7,8 @@ import WatchEditor from '../components/WatchEditor/WatchEditor';
 import MarkdownPanel from '../components/MarkdownPanel/MarkdownPanel';
 import ServerCard from '../components/ServerCard/ServerCard';
 import StatusSidebar, { ServerView } from '../components/StatusSidebar/StatusSidebar';
-import { DEFAULT_POLL_INTERVAL_MS } from '../utils/schema';
-import { GroupEntry, ProcessEntry, WatchStatus } from '../types/config';
+import { DEFAULT_POLL_INTERVAL_MS, hasCondition } from '../utils/schema';
+import { GroupEntry, ProcessEntry, ServerStatus } from '../types/config';
 import { useGroupStatus } from '../hooks/useGroupStatus';
 import { useProcessConfig } from '../hooks/useProcessConfig';
 import './Dashboard.css';
@@ -27,7 +28,11 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   /** 열려 있는 로그 · INI 파일 목록 창 */
   const [fileTarget, setFileTarget] = useState<{ process: ProcessEntry; serverLabel: string; root: FileRoot } | null>(null);
   /** 열려 있는 자동 재시작 · 감시 조건 창 */
-  const [watchTarget, setWatchTarget] = useState<{ process: ProcessEntry; serverLabel: string; watch: WatchStatus | undefined } | null>(null);
+  const [watchTarget, setWatchTarget] = useState<{
+    process: ProcessEntry;
+    serverLabel: string;
+    status: ServerStatus['processes'][number] | undefined;
+  } | null>(null);
   /** 검색에 가려진 카드를 골랐을 때, 검색을 지우고 다시 그려진 뒤 스크롤할 대상 */
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
@@ -44,14 +49,16 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
       .filter(server => server.group === group.slug)
       .map(server => {
         const processes = (config?.processes ?? []).filter(p => p.server === server.id);
+        // 실행 판단 조건이 없는 프로세스는 상태를 확인하지 않으므로 중지로 세지 않는다.
+        const checked = processes.filter(hasCondition);
         const serverStatus = status.servers[server.id];
         const stopped =
           serverStatus && !serverStatus.error
-            ? processes.filter(p => !serverStatus.processes.find(s => s.id === p.id)?.instances.length).length
+            ? checked.filter(p => !serverStatus.processes.find(s => s.id === p.id)?.instances.length).length
             : 0;
         const state =
           !serverStatus ? 'idle'
-          : serverStatus.error || (stopped > 0 && stopped === processes.length) ? 'error'
+          : serverStatus.error || (stopped > 0 && stopped === checked.length) ? 'error'
           : stopped > 0 ? 'warn'
           : 'ok';
         return { server, processes, status: serverStatus, stopped, state };
@@ -130,16 +137,17 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                   onChange={e => setFilter(e.target.value)}
                 />
                 <button className="btn btn-secondary" onClick={openEditor} disabled={config === null}>
-                  ⚙ 설정
+                  <Icon name="settings" />
+                  설정
                 </button>
                 <button className="btn btn-primary" onClick={status.refresh} disabled={config === null || !slugExists}>
-                  {status.loading ? '확인 중...' : '↻ 새로고침'}
+                  {status.loading ? '확인 중...' : <><Icon name="refresh" />새로고침</>}
                 </button>
               </div>
             </div>
 
-            <MarkdownPanel file="README.md" title="📖 소개 · 사용 방법" defaultOpen />
-            <MarkdownPanel file="API.md" title="🔌 API 명세 (프론트 · 백엔드)" defaultOpen={false} />
+            <MarkdownPanel file="README.md" icon="book" title="소개 · 사용 방법" defaultOpen />
+            <MarkdownPanel file="API.md" icon="code" title="API 명세 (프론트 · 백엔드)" defaultOpen={false} />
 
             {error && (
               <div className="api-error">
@@ -160,7 +168,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
               </div>
             )}
             {!loading && config && slugExists && view.every(v => v.servers.length === 0) && (
-              <div className="dashboard-empty">등록된 서버가 없습니다. ⚙ 설정에서 그룹 · 서버 · 프로세스를 추가하세요.</div>
+              <div className="dashboard-empty">등록된 서버가 없습니다. 설정에서 그룹 · 서버 · 프로세스를 추가하세요.</div>
             )}
 
             {view.map(({ group, servers }) => (
@@ -177,7 +185,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                   {servers.map(({ server, processes, status: serverStatus, state }) => {
                     // 검색: 그룹 · 서버로 걸리면 프로세스를 모두, 프로세스로 걸리면 일치하는 프로세스만 보여준다.
                     const serverMatches = matches(group.name, server.id, server.label, server.host);
-                    const shown = serverMatches ? processes : processes.filter(p => matches(p.id, p.label, p.match));
+                    const shown = serverMatches ? processes : processes.filter(p => matches(p.id, p.label, p.matchName, p.matchArgs, p.matchRegex));
                     if (!serverMatches && shown.length === 0) return null;
                     return (
                       <ServerCard
@@ -187,7 +195,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                         status={serverStatus}
                         state={state}
                         onOpenFiles={(process, root) => setFileTarget({ process, serverLabel: server.label || server.id, root })}
-                        onEditWatch={(process, watch) => setWatchTarget({ process, serverLabel: server.label || server.id, watch })}
+                        onEditWatch={(process, processStatus) => setWatchTarget({ process, serverLabel: server.label || server.id, status: processStatus })}
                         onActionDone={status.refresh}
                       />
                     );
@@ -207,7 +215,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
         <WatchEditor
           process={watchTarget.process}
           serverLabel={watchTarget.serverLabel}
-          watch={watchTarget.watch}
+          status={watchTarget.status}
           onSaved={next => {
             apply(next);
             status.refresh();

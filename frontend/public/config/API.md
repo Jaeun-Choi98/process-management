@@ -26,7 +26,7 @@
 | 로그 전체 내려받기 | `wc -c` 로 크기를 잰 뒤 `head -c <크기> -- '<파일>'` (출력을 그대로 흘려보냄, 최대 30분) |
 | INI 읽기 | `wc -c` 로 1MB 이하인지 본 뒤 `cat -- '<파일>'` |
 | INI 쓰기 | 받은 내용을 `<파일>.pm-new` 에 쓰고 크기가 맞는지 확인 → `cp -p` 로 `<파일>.bak` 백업 → `cat <파일>.pm-new > <파일>` (권한 · 소유자 유지) → 임시 파일 삭제 |
-| 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 match 정규식으로 찾은 값) |
+| 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 실행 판단 조건으로 찾은 값. 조건이 없으면 중지 · 재시작하지 않음) |
 | 시작 | 아래 명령 (스크립트가 있는 폴더에서 백그라운드로 실행, 출력은 버림) |
 
 ```
@@ -40,10 +40,12 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ### 자동 재시작
 
 `autoRestart` 를 켠 프로세스는 Go 서버가 `watchIntervalMs`(기본 10초)마다 확인합니다. (ps 결과는 화면 조회와 공유)
-`autoRestart` · `watchName` · `watchArgs` 는 모니터링 화면의 **감시** 창에서 바꿉니다. (`PUT /api/processes/:id/watch`)
+`autoRestart` 와 실행 판단 조건은 모니터링 화면의 **조건** 창에서 바꿉니다. (`PUT /api/processes/:id/watch`)
 
-- **감시 프로세스**: ps 명령줄 첫 단어의 파일 이름이 `watchName` 과 같고, 명령줄에 `watchArgs` 가 들어 있는 프로세스. 비워 둔 조건은 보지 않습니다. 화면 표시용 `match` 와 별개입니다.
-- 감시 프로세스가 없으면 시작 스크립트를 실행합니다(위 시작 명령). 그 뒤 `restartDelayMs`(기본 30초) 동안은 뜨기를 기다리고, 그래도 없으면 횟수 제한 없이 다시 실행합니다.
+- **실행 판단 조건**: 상태 표시 · 중지 · 자동 재시작이 모두 같은 조건을 씁니다.
+  - 이름 · 문자열 방식: ps 명령줄 첫 단어의 파일 이름이 `matchName` 과 같고, 명령줄에 `matchArgs` 가 들어 있는 프로세스. 비워 둔 쪽은 보지 않습니다.
+  - 정규식 방식: 명령줄 전체가 `matchRegex` 에 맞는 프로세스.
+- 조건에 맞는 프로세스가 없으면 시작 스크립트를 실행합니다(위 시작 명령). 그 뒤 `restartDelayMs`(기본 30초) 동안은 뜨기를 기다리고, 그래도 없으면 횟수 제한 없이 다시 실행합니다.
 - 화면에서 **stop** 하면 **start** · **restart** 할 때까지 자동 재시작을 멈춥니다. 화면에서 시작해도 `restartDelayMs` 동안은 자동으로 다시 실행하지 않습니다.
 - 두 값은 설정 파일에서 매번 읽으므로, 저장하면 다음 확인부터 바로 적용됩니다.
 - 멈춤 상태 · 재시작 횟수는 Go 서버 메모리에만 있어서, Go 서버를 다시 켜면 초기화됩니다.
@@ -68,9 +70,9 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
     { "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "hasPassword": true }
   ],
   "processes": [
-    { "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
+    { "id": "shelter", "server": "uw-app1", "label": "Shelter", "matchName": "java", "matchArgs": "/opt/shelter/shelter.jar",
       "startScript": "/opt/shelter/start.sh", "logFiles": ["logs/*.log", "/var/log/shelter/*.log"],
-      "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }
+      "autoRestart": true }
   ]
 }
 ```
@@ -94,19 +96,21 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].id | O | 고유 id (모든 서버에서 유일) |
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
-| processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
+| processes[].matchName | | 실행 판단 조건: 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
+| processes[].matchArgs | | 실행 판단 조건: 명령줄에 들어 있어야 하는 문자열 (정규식 아님) |
+| processes[].matchRegex | | 실행 판단 조건: 명령줄(args) 전체에 대한 정규식 (Go RE2 문법). matchName · matchArgs 와 함께 쓸 수 없음. 셋 다 없으면 상태를 확인하지 않음 |
 | processes[].logFiles | | 로그 파일 패턴 목록 (선택, 최대 10개). **비우면 시작 스크립트 폴더의 `*.log`, `*/*.log` … `*/*/*/*/*.log` (5단계)**. 상대 경로는 시작 스크립트 폴더 기준(`..` 금지), 절대 경로는 그대로. 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 펼친 경로의 앞 두 폴더는 와일드카드 없이 |
 | processes[].iniFiles | | INI 파일 패턴 목록 (선택). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini`. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
-| processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
-| processes[].watchName | | 감시 프로세스의 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
-| processes[].watchArgs | | 감시 프로세스 명령줄에 들어 있어야 하는 문자열 (정규식 아님) |
+| processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와 실행 판단 조건 필요 |
+
+예전 형식(`match` · `watchName` · `watchArgs`)의 설정 파일은 읽을 때 조건 하나로 바뀝니다. 감시 조건이 있으면 `matchName` · `matchArgs` 로, 없으면 `match` 를 `matchRegex` 로 씁니다. 저장(PUT)할 때는 새 필드만 받습니다.
 
 ### PUT /api/config
 
-`⚙ 설정` 에서 **저장**을 누르면 호출합니다. 설정 전체를 교체하고, 저장된 설정을 GET 과 같은 형식(새 `version`)으로 돌려줍니다.
+`설정` 에서 **저장**을 누르면 호출합니다. 설정 전체를 교체하고, 저장된 설정을 GET 과 같은 형식(새 `version`)으로 돌려줍니다.
 
-- 본문의 `version` 은 설정 창을 열 때 GET 으로 받은 값입니다. 지금 파일의 version 과 다르면(그 사이 **감시** 창, 다른 사용자, 파일 직접 수정으로 바뀌었으면) 덮어쓰지 않고 `409` 입니다. 화면은 설정 창을 열 때마다 최신 설정을 다시 읽습니다.
+- 본문의 `version` 은 설정 창을 열 때 GET 으로 받은 값입니다. 지금 파일의 version 과 다르면(그 사이 **조건** 창, 다른 사용자, 파일 직접 수정으로 바뀌었으면) 덮어쓰지 않고 `409` 입니다. 화면은 설정 창을 열 때마다 최신 설정을 다시 읽습니다.
 - 스크립트로 저장할 때도 먼저 GET 으로 받은 `version` 을 넣어야 합니다. (설정 파일이 아직 없으면 빈 값)
 
 | 상태 코드 | 의미 |
@@ -130,7 +134,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
       "checkedAt": "2026-11-19T11:15:19+09:00",
       "processes": [
         { "id": "shelter", "instances": [{ "pid": 4321, "cpu": 12.5, "mem": 3.2, "elapsed": "2-01:02:03", "command": "java -jar /opt/shelter/shelter.jar" }],
-          "watch": { "healthy": true, "restarts": 1, "lastRestartAt": "2026-11-19T10:02:03+09:00" } }
+          "watch": { "restarts": 1, "lastRestartAt": "2026-11-19T10:02:03+09:00" } }
       ]
     },
     { "id": "uw-db", "error": "ssh ops@10.0.0.12:22 접속 실패: ... connection refused", "checkedAt": "...", "processes": [] }
@@ -138,8 +142,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 }
 ```
 
-- `instances` 가 비어 있으면 중지된 프로세스입니다.
-- `watch` 는 `watchName` 이나 `watchArgs` 를 등록한 프로세스에만 있습니다. `healthy` 감시 프로세스가 지금 있는지, `paused` 화면에서 중지해 자동 재시작이 멈췄는지, `restarts` Go 서버가 켜진 뒤 자동으로 시작한 횟수, `lastRestartAt` 마지막 자동 시작 시각, `lastError` 마지막 자동 시작 · 확인 오류.
+- `instances` 는 실행 판단 조건에 맞는 프로세스입니다. 비어 있으면 중지된 프로세스입니다. (조건이 없는 프로세스도 비어 있습니다)
+- `watch` 는 `autoRestart` 를 켠 프로세스에만 있습니다. `paused` 화면에서 중지해 자동 재시작이 멈췄는지, `restarts` Go 서버가 켜진 뒤 자동으로 시작한 횟수, `lastRestartAt` 마지막 자동 시작 시각, `lastError` 마지막 자동 시작 · 확인 오류.
 - SSH 접속에 실패한 서버는 `error` 에 이유가 들어가고, 나머지 서버의 결과는 그대로 옵니다. (응답은 `200`)
 - 없는 그룹이면 `404`
 
@@ -186,7 +190,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 
 - 시작할 때 잰 크기만큼만 보내고 `Content-Length` 로 알려줍니다. (받는 동안 로그가 늘어나도 길이가 맞도록)
 - Go 서버는 파일을 메모리에 모으지 않고 SSH 출력을 그대로 흘려보냅니다. 브라우저에서 취소하면 서버 쪽 명령도 멈춥니다.
-- 화면의 **⤓ 화면 내용**은 이 API 를 쓰지 않고, 화면에 보이는 줄로 브라우저에서 바로 파일을 만듭니다.
+- 화면의 **화면 내용**은 이 API 를 쓰지 않고, 화면에 보이는 줄로 브라우저에서 바로 파일을 만듭니다.
 - 보내기 시작한 뒤 실패하면 상태 코드를 바꿀 수 없어 브라우저에는 내려받기 실패로 보입니다. (Go 서버 로그에 남습니다)
 
 | 상태 코드 | 의미 |
@@ -224,17 +228,17 @@ INI 파일 패턴에 맞는 `path`(절대 경로) 파일을 통째로 읽습니�
 
 ### PUT /api/processes/:id/watch
 
-모니터링 화면의 **감시** 창에서 프로세스 하나의 자동 재시작 설정만 바꿉니다. 본문 `{"autoRestart": true, "watchName": "", "watchArgs": "-jar /opt/app/app.jar"}`.
+모니터링 화면의 **조건** 창에서 프로세스 하나의 실행 판단 조건 · 자동 재시작만 바꿉니다. 본문 `{"autoRestart": true, "matchName": "java", "matchArgs": "-jar /opt/app/app.jar", "matchRegex": ""}`.
 응답은 `GET /api/config` 와 같은 형식의 전체 설정입니다.
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 감시 조건이 없음, 시작 스크립트가 없음 등 (`"watchArgs: ..."` 형식) |
+| `400` | 자동 재시작인데 조건이 없음, 정규식과 이름 · 문자열을 함께 씀, 시작 스크립트가 없음 등 (`"autoRestart: ..."` 형식) |
 | `404` | 없는 프로세스 |
 
-### GET /api/processes/:id/watch-test?name=java&args=app.jar
+### GET /api/processes/:id/watch-test?name=java&args=app.jar (또는 ?regex=...)
 
-감시 조건(`name` 감시 이름 · `args` 감시 문자열, 하나 이상)에 지금 서버의 ps 에서 맞는 프로세스를 돌려줍니다. 저장 전 확인용입니다. 응답 `200` `{"instances": [{ "pid": 4321, ... }]}`
+저장하기 전의 실행 판단 조건(`name` · `args` 중 하나 이상, 또는 `regex`)에 지금 서버의 ps 에서 맞는 프로세스를 돌려줍니다. 저장 전 확인용입니다. 응답 `200` `{"instances": [{ "pid": 4321, ... }]}`. 조건이 없거나 정규식이 잘못되었으면 `400`
 
 ### POST /api/processes/:id/start · stop · restart
 
@@ -266,7 +270,7 @@ Go 서버의 로그 레벨을 조회(`GET /log-config`)하거나 바꿉니다(`G
 | 경로 | 내용 |
 |---|---|
 | `/` | `/all` 로 이동 |
-| `/all`, `/<그룹 slug>` 등 확장자 없는 경로 | 화면(`index.html`). 그룹 주소에서는 상단 탭 · ⚙ 설정이 그 그룹만 다룹니다 |
+| `/all`, `/<그룹 slug>` 등 확장자 없는 경로 | 화면(`index.html`). 그룹 주소에서는 상단 탭 · 설정이 그 그룹만 다룹니다 |
 | `/config/README.md` | 화면 위 소개 · 사용 방법 |
 | `/config/API.md` | 이 문서 |
 

@@ -1,4 +1,5 @@
 import React from 'react';
+import Icon from '../Icon/Icon';
 import { GroupEntry } from '../../types/config';
 import './Header.css';
 
@@ -23,7 +24,7 @@ const Header: React.FC<HeaderProps> = ({ groups, currentSlug, navigate }) => {
   return (
     <nav className="navbar">
       <a className="navbar-brand" href={home} onClick={e => { e.preventDefault(); navigate(home); }}>
-        <span className="navbar-brand-icon">&#9678;</span>
+        <Icon name="activity" className="navbar-brand-icon" />
         Process Management
       </a>
       <div className="navbar-tabs">

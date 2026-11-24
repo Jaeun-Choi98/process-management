@@ -7,9 +7,9 @@
  *   "pollIntervalMs": 5000,
  *   "groups":    [{ "slug": "uw", "name": "의왕" }],
  *   "servers":   [{ "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "hasPassword": true }],
- *   "processes": [{ "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
+ *   "processes": [{ "id": "shelter", "server": "uw-app1", "label": "Shelter", "matchName": "java", "matchArgs": "/opt/shelter/shelter.jar",
  *                   "logFiles": ["/opt/shelter/logs/*.log"], "iniFiles": ["/opt/shelter/conf/*.ini"], "startScript": "/opt/shelter/start.sh",
- *                   "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }]
+ *                   "autoRestart": true }]
  * }
  */
 export interface ProcessConfig {
@@ -59,8 +59,19 @@ export interface ProcessEntry {
   server: string;
   /** 화면 표시 이름 (없으면 id) */
   label?: string;
-  /** ps 명령줄에 대한 정규식. 맞는 프로세스가 있으면 실행 중으로 본다. */
-  match: string;
+  /**
+   * 실행 판단 조건. ps 에서 이 조건에 맞는 프로세스를 이 항목의 실행 인스턴스로 본다.
+   * 상태 표시 · 중지 · 자동 재시작이 모두 이 조건 하나를 쓴다. 설정 창이 아니라 모니터링 화면의 '조건' 창에서 바꾼다.
+   *   이름 · 문자열 방식: matchName · matchArgs 중 하나 이상 (둘 다 적으면 한 프로세스가 둘 다 만족)
+   *   정규식 방식:       matchRegex (이름 · 문자열과 함께 쓸 수 없다)
+   * 모두 비어 있으면 상태를 확인하지 않는다. (설정에서 막 추가한 프로세스)
+   */
+  /** 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java) */
+  matchName?: string;
+  /** 명령줄에 들어 있어야 하는 문자열. 정규식이 아니다. (예: /opt/app/app.jar) */
+  matchArgs?: string;
+  /** 명령줄 전체에 대한 정규식 (예: java .*app\.jar) */
+  matchRegex?: string;
   /** 로그 파일 패턴 (예: /opt/app/logs/*.log). 로그 버튼에는 이 패턴에 맞는 파일만 보이고, tail 로 본다. */
   logFiles?: string[];
   /** INI 파일 패턴 (예: /opt/app/conf/*.ini). INI 버튼에는 이 패턴에 맞는 파일만 보이고, 읽고 고친다. */
@@ -68,14 +79,10 @@ export interface ProcessEntry {
   /** 시작 · 재시작 때 실행할 스크립트의 절대 경로 */
   startScript?: string;
   /**
-   * 자동 재시작. 감시 프로세스가 ps 에 없으면 Go 서버가 시작 스크립트를 실행한다. (watchName 이나 watchArgs, startScript 필요)
-   * 이 값과 watchName · watchArgs 는 설정 창이 아니라 모니터링 화면의 '감시' 에서 바꾼다. (PUT /api/processes/:id/watch)
+   * 자동 재시작. 실행 판단 조건에 맞는 프로세스가 ps 에 없으면 Go 서버가 시작 스크립트를 실행한다. (조건 · startScript 필요)
+   * 실행 판단 조건과 함께 모니터링 화면의 '조건' 창에서 바꾼다. (PUT /api/processes/:id/watch)
    */
   autoRestart?: boolean;
-  /** 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java, 비우면 문자열만 본다) */
-  watchName?: string;
-  /** 감시 프로세스의 명령줄에 들어 있어야 하는 문자열. 정규식이 아니다. (예: /opt/app/app.jar, 비우면 이름만 본다) */
-  watchArgs?: string;
 }
 
 /** GET /api/status 응답의 서버 하나 */
@@ -87,10 +94,8 @@ export interface ServerStatus {
   processes: { id: string; instances: ProcessInstance[]; watch?: WatchStatus }[];
 }
 
-/** 감시 조건(watchName · watchArgs)을 등록한 프로세스의 감시 · 자동 재시작 상태. Go 서버 메모리에만 있다. */
+/** 자동 재시작을 켠 프로세스의 자동 재시작 상태. Go 서버 메모리에만 있다. (실행 여부는 instances 로 본다) */
 export interface WatchStatus {
-  /** 감시 프로세스가 지금 ps 에 있는지 */
-  healthy: boolean;
   /** 화면에서 중지해 자동 재시작이 멈춘 상태. 시작 · 재시작하면 다시 켜진다. */
   paused?: boolean;
   /** Go 서버가 켜진 뒤 자동으로 시작한 횟수 */

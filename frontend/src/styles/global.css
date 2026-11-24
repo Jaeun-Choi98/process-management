@@ -53,8 +53,18 @@ code {
   color: var(--text-muted);
 }
 
+/* ── 아이콘 (components/Icon) ───────────────────────── */
+.icon {
+  flex-shrink: 0;
+  vertical-align: -0.125em;
+}
+
 /* ── Buttons ───────────────────────────────────────── */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: none;
   border-radius: var(--radius);
   padding: 6px 16px;
@@ -103,7 +113,7 @@ code {
   white-space: pre-wrap;
 }
 
-/* ── 아이콘 버튼 (✕ ▲ ▼ ↻) ─────────────────────────── */
+/* ── 아이콘 버튼 (닫기 · 위로 · 아래로) ─────────────────── */
 .btn-icon {
   display: flex;
   align-items: center;

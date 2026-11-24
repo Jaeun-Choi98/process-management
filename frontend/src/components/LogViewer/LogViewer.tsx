@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Icon from '../Icon/Icon';
 import { FileList, ProcessEntry } from '../../types/config';
 import { requestApi } from '../../api/client';
 import IniEditor from '../IniEditor/IniEditor';
@@ -168,18 +169,19 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
             <span className="log-viewer-kind">{root === 'ini' ? 'INI 설정' : '로그'}</span>
           </div>
           <button className="btn-icon" onClick={close} title="닫기">
-            ✕
+            <Icon name="close" />
           </button>
         </header>
 
         <div className="log-viewer-pathbar">
           {file !== null && (
             <button className="btn btn-secondary" onClick={closeFile} title="목록으로 (Esc)">
-              ← 목록
+              <Icon name="arrow-left" />
+              목록
             </button>
           )}
           {file === null ? (
-            <span className="log-viewer-patterns" title="이 패턴에 맞는 파일만 보입니다 (⚙ 설정에서 비워 두면 시작 스크립트 폴더 기준)">
+            <span className="log-viewer-patterns" title="이 패턴에 맞는 파일만 보입니다 (설정에서 비워 두면 시작 스크립트 폴더 기준)">
               {(list?.patterns ?? effectivePatterns(target, root).patterns).join('\n')}
             </span>
           ) : (
@@ -190,7 +192,8 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
           )}
           {file === null && (
             <button className="btn btn-secondary log-viewer-pathbar-refresh" onClick={loadList}>
-              ↻ 새로고침
+              <Icon name="refresh" />
+              새로고침
             </button>
           )}
         </div>
@@ -262,7 +265,7 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
                 자동 새로고침 (3초)
               </label>
               <button className="btn btn-secondary" onClick={load} disabled={loading}>
-                {loading ? '읽는 중...' : '↻ 새로고침'}
+                {loading ? '읽는 중...' : <><Icon name="refresh" />새로고침</>}
               </button>
               <span className="log-viewer-export">
                 <button
@@ -271,7 +274,8 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
                   disabled={output === null}
                   title={`지금 보이는 ${filter ? '걸러진 ' : ''}줄만 (마지막 ${lines}줄 중 ${shownLines.length}줄) 내려받습니다`}
                 >
-                  ⤓ 화면 내용
+                  <Icon name="download" />
+                  화면 내용
                 </button>
                 {/* 전체 파일은 Go 서버가 첨부 파일로 보낸다. (큰 파일도 메모리에 모으지 않고 흘려보낸다) */}
                 <a
@@ -280,7 +284,8 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
                   download
                   title="파일 전체를 내려받습니다"
                 >
-                  ⤓ 전체 파일
+                  <Icon name="download" />
+                  전체 파일
                 </a>
               </span>
               <span className="log-viewer-time">{fetchedAt && fetchedAt.toLocaleTimeString()}</span>

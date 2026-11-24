@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import Icon from '../Icon/Icon';
 import { IniFile } from '../../types/config';
 import { requestApi } from '../../api/client';
 import './IniEditor.css';
@@ -94,10 +95,11 @@ const IniEditor: React.FC<IniEditorProps> = ({ processId, path, onDirtyChange })
           되돌리기
         </button>
         <button className="btn btn-secondary" onClick={reload} disabled={busy}>
-          ↻ 다시 읽기
+          <Icon name="refresh" />
+          다시 읽기
         </button>
         <span className="ini-editor-info">
-          {dirty && <strong className="ini-editor-dirty">● 저장 안 됨</strong>}
+          {dirty && <strong className="ini-editor-dirty"><Icon name="dot" />저장 안 됨</strong>}
           {saved && `UTF-8 · ${saved.crlf ? 'CRLF' : 'LF'} · ${text.split('\n').length}줄`}
         </span>
       </div>

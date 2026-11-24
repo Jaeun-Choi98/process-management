@@ -26,6 +26,13 @@
   background: var(--surface-2);
 }
 
+.markdown-panel-title,
+.markdown-panel-caret {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .markdown-panel-caret {
   font-size: 0.75rem;
   font-weight: 400;

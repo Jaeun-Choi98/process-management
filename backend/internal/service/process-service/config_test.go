@@ -21,11 +21,12 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 			{ID: "s1", Group: "nope", Host: "bad host", Port: 70000, User: "", Password: ""},
 		},
 		Processes: []Process{
-			{ID: "p1", Server: "s1", Match: "java", LogFiles: []string{"/var/log/app/*.log"}, IniFiles: []string{"/opt/app/conf/*.ini"}, StartScript: "/opt/app/start.sh",
-				AutoRestart: true, WatchName: "java", WatchArgs: "-jar /opt/app/app.jar"},
-			{ID: "p1", Server: "s9", Match: "(", LogFiles: []string{"/home/*"}, IniFiles: []string{"/opt/app/conf/*"}, StartScript: "start.sh; rm -rf /", WatchName: "/usr/bin/java"},
-			{ID: "p3", Server: "s1", Match: "java", AutoRestart: true},
-			{ID: "p4", Server: "s1", Match: "java", AutoRestart: true, WatchArgs: "/opt/app/app.jar", StartScript: "/opt/app/start.sh"},
+			{ID: "p1", Server: "s1", MatchName: "java", MatchArgs: "-jar /opt/app/app.jar", LogFiles: []string{"/var/log/app/*.log"}, IniFiles: []string{"/opt/app/conf/*.ini"}, StartScript: "/opt/app/start.sh",
+				AutoRestart: true},
+			{ID: "p1", Server: "s9", MatchName: "/usr/bin/java", MatchRegex: "(", LogFiles: []string{"/home/*"}, IniFiles: []string{"/opt/app/conf/*"}, StartScript: "start.sh; rm -rf /"},
+			{ID: "p3", Server: "s1", AutoRestart: true},
+			{ID: "p4", Server: "s1", MatchRegex: "java .*app", AutoRestart: true, StartScript: "/opt/app/start.sh"},
+			{ID: "p5", Server: "s1"}, // 조건 없이 등록만 한 프로세스는 허용한다.
 		},
 	}
 	err := c.Validate()
@@ -35,14 +36,14 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 	for _, want := range []string{
 		"pollIntervalMs", "watchIntervalMs", "restartDelayMs", "groups[1].slug", "groups[2].slug", "groups[2].name",
 		"servers[1].id", "servers[1].group", "servers[1].host", "servers[1].port", "servers[1].user", "servers[1].password",
-		"processes[1].id", "processes[1].server", "processes[1].match", "processes[1].logFiles", "processes[1].iniFiles", "processes[1].startScript",
-		"processes[1].watchName", "processes[2].watchArgs", "processes[2].startScript",
+		"processes[1].id", "processes[1].server", "processes[1].matchRegex", "processes[1].matchName", "processes[1].logFiles", "processes[1].iniFiles", "processes[1].startScript",
+		"processes[2].autoRestart", "processes[2].startScript",
 	} {
 		if !strings.Contains(err.Error(), want+":") {
 			t.Errorf("missing error for %s\n%v", want, err)
 		}
 	}
-	for _, unexpected := range []string{"groups[0]", "servers[0]", "processes[0]", "processes[3]"} {
+	for _, unexpected := range []string{"groups[0]", "servers[0]", "processes[0]", "processes[3]", "processes[4]"} {
 		if strings.Contains(err.Error(), unexpected) {
 			t.Errorf("unexpected error for %s\n%v", unexpected, err)
 		}
@@ -104,8 +105,8 @@ func TestParsePS(t *testing.T) {
 	}
 	// PID 1 과 상태 확인용 ps 는 제외한다.
 	rows = append(rows, Instance{PID: 99, Command: psArgs + " java"})
-	if got := matchInstances(Process{Match: "java|init"}, rows); len(got) != 1 || got[0].PID != 4321 {
-		t.Errorf("matchInstances = %+v", got)
+	if got := findInstances(Process{MatchRegex: "java|init"}, rows); len(got) != 1 || got[0].PID != 4321 {
+		t.Errorf("findInstances = %+v", got)
 	}
 }
 
@@ -194,17 +195,17 @@ func TestUpdateWatch(t *testing.T) {
 	body, _ := json.Marshal(Config{
 		Groups:    []Group{{Slug: "uw", Name: "의왕"}},
 		Servers:   []Server{{ID: "s1", Group: "uw", Host: "10.0.0.1", User: "ops", Password: "secret"}},
-		Processes: []Process{{ID: "a", Server: "s1", Match: "java", StartScript: "/opt/a/start.sh"}, {ID: "b", Server: "s1", Match: "x"}},
+		Processes: []Process{{ID: "a", Server: "s1", MatchName: "java", StartScript: "/opt/a/start.sh"}, {ID: "b", Server: "s1", MatchRegex: "x"}},
 	})
 	if _, err := store.Save(body); err != nil {
 		t.Fatal(err)
 	}
 
-	saved, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true, WatchArgs: "  -jar /opt/a/a.jar "})
+	saved, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true, MatchName: "java", MatchArgs: "  -jar /opt/a/a.jar "})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := saved.Processes[0]; !p.AutoRestart || p.WatchArgs != "-jar /opt/a/a.jar" || saved.Servers[0].Password != "secret" {
+	if p := saved.Processes[0]; !p.AutoRestart || p.MatchName != "java" || p.MatchArgs != "-jar /opt/a/a.jar" || saved.Servers[0].Password != "secret" {
 		t.Errorf("saved = %+v / %+v", p, saved.Servers[0])
 	}
 	if loaded, _ := store.Load(); !loaded.Processes[0].AutoRestart {
@@ -212,11 +213,14 @@ func TestUpdateWatch(t *testing.T) {
 	}
 
 	// 시작 스크립트가 없는 프로세스는 자동 재시작을 켤 수 없고, 문제는 "processes[1]." 없이 알려준다.
-	if _, err := store.UpdateWatch("b", WatchUpdate{AutoRestart: true, WatchName: "x"}); err == nil || !strings.HasPrefix(err.Error(), "startScript:") {
+	if _, err := store.UpdateWatch("b", WatchUpdate{AutoRestart: true, MatchName: "x"}); err == nil || !strings.HasPrefix(err.Error(), "startScript:") {
 		t.Errorf("expected startScript error, got %v", err)
 	}
-	if _, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true}); err == nil || !strings.HasPrefix(err.Error(), "watchArgs:") {
-		t.Errorf("expected watch condition error, got %v", err)
+	if _, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true}); err == nil || !strings.HasPrefix(err.Error(), "autoRestart:") {
+		t.Errorf("expected condition error, got %v", err)
+	}
+	if _, err := store.UpdateWatch("a", WatchUpdate{MatchName: "java", MatchRegex: "java"}); err == nil || !strings.HasPrefix(err.Error(), "matchRegex:") {
+		t.Errorf("expected regex/name conflict error, got %v", err)
 	}
 	if _, err := store.UpdateWatch("zzz", WatchUpdate{}); err == nil {
 		t.Error("unknown process should fail")
@@ -234,7 +238,7 @@ func TestWatchTimingDefaults(t *testing.T) {
 	}
 }
 
-func TestWatchInstances(t *testing.T) {
+func TestFindInstances(t *testing.T) {
 	rows := []Instance{
 		{PID: 10, Command: "/usr/lib/jvm/bin/java -jar /opt/app/app.jar"},
 		{PID: 11, Command: "vi /opt/app/app.jar.conf"},
@@ -243,7 +247,7 @@ func TestWatchInstances(t *testing.T) {
 	}
 	pids := func(p Process) []int {
 		var out []int
-		for _, i := range watchInstances(p, rows) {
+		for _, i := range findInstances(p, rows) {
 			out = append(out, i.PID)
 		}
 		return out
@@ -252,9 +256,11 @@ func TestWatchInstances(t *testing.T) {
 		process Process
 		want    []int
 	}{
-		{Process{WatchName: "java", WatchArgs: "/opt/app/app.jar"}, []int{10}},
-		{Process{WatchName: "java"}, []int{10, 12}},
-		{Process{WatchArgs: "/opt/app/app.jar"}, []int{10, 11}}, // 문자열만 쓰면 다른 프로그램도 맞을 수 있다
+		{Process{MatchName: "java", MatchArgs: "/opt/app/app.jar"}, []int{10}},
+		{Process{MatchName: "java"}, []int{10, 12}},
+		{Process{MatchArgs: "/opt/app/app.jar"}, []int{10, 11}}, // 문자열만 쓰면 다른 프로그램도 맞을 수 있다
+		{Process{MatchRegex: `java .*/app\.jar$`}, []int{10}},
+		{Process{MatchRegex: "("}, nil}, // 잘못된 정규식은 아무것도 찾지 않는다
 		{Process{}, nil},
 	} {
 		if got := pids(c.process); fmt.Sprint(got) != fmt.Sprint(c.want) {
@@ -270,7 +276,7 @@ func TestSaveRejectsStaleVersion(t *testing.T) {
 			Version:   version,
 			Groups:    []Group{{Slug: "uw", Name: "의왕"}},
 			Servers:   []Server{{ID: "s1", Group: "uw", Host: "10.0.0.1", User: "ops", Password: "pw"}},
-			Processes: []Process{{ID: "a", Server: "s1", Match: "java", StartScript: "/opt/a/start.sh"}},
+			Processes: []Process{{ID: "a", Server: "s1", MatchName: "java", StartScript: "/opt/a/start.sh"}},
 		})
 		return data
 	}
@@ -286,7 +292,7 @@ func TestSaveRejectsStaleVersion(t *testing.T) {
 	}
 
 	// 설정 창을 연 상태(first.Version)에서 감시 창이 먼저 저장하면, 설정 창 저장은 409 로 거부된다.
-	watched, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true, WatchArgs: "a.jar"})
+	watched, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true, MatchArgs: "a.jar"})
 	if err != nil || watched.Version == first.Version {
 		t.Fatalf("update watch: %v, version %q", err, watched.Version)
 	}
@@ -325,7 +331,7 @@ func TestEffectivePatterns(t *testing.T) {
 
 func TestValidateRelativePatterns(t *testing.T) {
 	base := func(p Process) Config {
-		p.ID, p.Server, p.Match = "p", "s", "x"
+		p.ID, p.Server, p.MatchRegex = "p", "s", "x"
 		return Config{
 			Groups:    []Group{{Slug: "uw", Name: "의왕"}},
 			Servers:   []Server{{ID: "s", Group: "uw", Host: "h", User: "u", Password: "pw"}},
@@ -346,5 +352,26 @@ func TestValidateRelativePatterns(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%+v should be rejected", bad)
 		}
+	}
+}
+
+func TestLoadMigratesMatchCondition(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "processes.json")
+	os.WriteFile(file, []byte(`{"groups":[],"servers":[],"processes":[
+		{"id":"a","server":"s","match":"java .*a\\.jar","autoRestart":true,"watchName":"java","watchArgs":"a.jar"},
+		{"id":"b","server":"s","match":"java .*b\\.jar"},
+		{"id":"c","server":"s","matchArgs":"c.jar"}]}`), 0o600)
+	c, err := NewStore(file).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 감시 조건이 있으면 그것을, 없으면 match 정규식을 쓴다. 새 형식은 그대로 둔다.
+	want := []Process{
+		{ID: "a", Server: "s", MatchName: "java", MatchArgs: "a.jar", AutoRestart: true},
+		{ID: "b", Server: "s", MatchRegex: `java .*b\.jar`},
+		{ID: "c", Server: "s", MatchArgs: "c.jar"},
+	}
+	if fmt.Sprintf("%+v", c.Processes) != fmt.Sprintf("%+v", want) {
+		t.Errorf("migrated = %+v\nwant %+v", c.Processes, want)
 	}
 }

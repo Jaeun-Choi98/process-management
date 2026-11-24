@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
+import Icon, { IconName } from '../Icon/Icon';
 import './MarkdownPanel.css';
 
 interface MarkdownPanelProps {
   /** public/config 아래의 md 파일 이름 (예: README.md). 파일이 없으면 패널을 그리지 않는다. */
   file: string;
   title: string;
+  /** 제목 앞 아이콘 */
+  icon?: IconName;
   /** 처음 들어왔을 때 펼쳐 둘지. 이후에는 사용자가 접고 편 상태를 브라우저에 기억한다. */
   defaultOpen: boolean;
 }
@@ -81,7 +84,7 @@ function renderMarkdown(markdown: string): string {
 }
 
 /** config 폴더의 md 파일(소개, API 명세 등)을 대시보드 위에 접고 펼 수 있는 패널로 보여준다. */
-const MarkdownPanel: React.FC<MarkdownPanelProps> = ({ file, title, defaultOpen }) => {
+const MarkdownPanel: React.FC<MarkdownPanelProps> = ({ file, title, icon, defaultOpen }) => {
   const url = `${process.env.PUBLIC_URL}/config/${file}`;
   const openStorageKey = `process-management.panel-open.${file}`;
   const [html, setHtml] = useState<string | null>(null);
@@ -122,8 +125,14 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({ file, title, defaultOpen 
   return (
     <section className="markdown-panel">
       <button type="button" className="markdown-panel-toggle" onClick={toggle} aria-expanded={open}>
-        <span>{title}</span>
-        <span className="markdown-panel-caret">{open ? '접기 ▴' : '펼치기 ▾'}</span>
+        <span className="markdown-panel-title">
+          {icon && <Icon name={icon} />}
+          {title}
+        </span>
+        <span className="markdown-panel-caret">
+          {open ? '접기' : '펼치기'}
+          <Icon name={open ? 'chevron-up' : 'chevron-down'} />
+        </span>
       </button>
       {open && <div className="markdown-panel-body" dangerouslySetInnerHTML={{ __html: html }} />}
     </section>

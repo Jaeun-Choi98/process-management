@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
+import Icon from '../Icon/Icon';
 import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../types/config';
 import { ServerState } from '../StatusSidebar/StatusSidebar';
 import { FileRoot } from '../LogViewer/LogViewer';
 import { requestApi } from '../../api/client';
-import { effectivePatterns } from '../../utils/schema';
+import { describeCondition, effectivePatterns, hasCondition } from '../../utils/schema';
 import './ServerCard.css';
+
+type ProcessStatus = ServerStatus['processes'][number];
 
 interface ServerCardProps {
   server: ServerEntry;
@@ -17,7 +20,8 @@ interface ServerCardProps {
   /** 로그 · INI 파일 목록 창을 연다. */
   onOpenFiles: (process: ProcessEntry, root: FileRoot) => void;
   /** 자동 재시작 · 감시 조건 창을 연다. */
-  onEditWatch: (process: ProcessEntry, watch: WatchStatus | undefined) => void;
+  /** 실행 판단 조건 · 자동 재시작 창을 연다. */
+  onEditWatch: (process: ProcessEntry, status: ProcessStatus | undefined) => void;
   /** 시작 · 중지가 끝나면 호출한다. (상태 새로고침) */
   onActionDone: () => void;
 }
@@ -29,10 +33,10 @@ type Action = 'start' | 'stop' | 'restart';
 const ACTION_TEXT: Record<Action, string> = { start: '시작', stop: '중지', restart: '재시작' };
 
 /** 자동 재시작 배지의 글자 · 색 · 설명. 자동 재시작을 켜지 않았으면 null */
-const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined) => {
+const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined, running: boolean) => {
   if (!process.autoRestart || !watch) return null;
   const detail = [
-    `감시: ${[process.watchName && `실행 파일 ${process.watchName}`, process.watchArgs && `명령줄에 "${process.watchArgs}" 포함`].filter(Boolean).join(', ')}`,
+    `조건: ${describeCondition(process)}`,
     `자동 시작 ${watch.restarts}회${watch.lastRestartAt ? ` · 마지막 ${new Date(watch.lastRestartAt).toLocaleString()}` : ''}`,
     watch.lastError && `오류: ${watch.lastError}`,
   ]
@@ -40,7 +44,7 @@ const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined)
     .join('\n');
   if (watch.paused) return { text: '자동 재시작 멈춤', kind: 'muted', title: `화면에서 중지해 멈췄습니다. 시작 · 재시작하면 다시 켜집니다.\n${detail}` };
   if (watch.lastError) return { text: '자동 재시작 오류', kind: 'error', title: detail };
-  if (!watch.healthy) return { text: '감시 프로세스 없음 · 재시작 대기', kind: 'warn', title: detail };
+  if (!running) return { text: '중지됨 · 재시작 대기', kind: 'warn', title: detail };
   return { text: watch.restarts > 0 ? `자동 재시작 ${watch.restarts}회` : '자동 재시작', kind: 'ok', title: detail };
 };
 
@@ -71,7 +75,9 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
     }
   };
 
-  const runningCount = processes.filter(p => status?.processes.find(s => s.id === p.id)?.instances.length).length;
+  // 실행 판단 조건이 없는 프로세스는 상태를 확인하지 않으므로 세지 않는다.
+  const checked = processes.filter(hasCondition);
+  const runningCount = checked.filter(p => status?.processes.find(s => s.id === p.id)?.instances.length).length;
 
   return (
     <section className="server-card" id={`server-card-${server.id}`} tabIndex={-1}>
@@ -83,7 +89,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
           {server.port && server.port !== 22 ? `:${server.port}` : ''}
         </span>
         <span className="server-card-summary">
-          {status && !status.error && `실행 ${runningCount}/${processes.length}`}
+          {status && !status.error && `실행 ${runningCount}/${checked.length}`}
         </span>
       </header>
 
@@ -111,11 +117,13 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                 const processStatus = status?.processes.find(s => s.id === process.id);
                 const instances = processStatus?.instances ?? [];
                 const running = instances.length > 0;
+                // 실행 판단 조건이 없으면 상태를 확인하지 않는다. (설정에서 막 추가한 프로세스)
+                const configured = hasCondition(process);
                 // 접속 실패 · 첫 확인 전에는 실행 여부를 알 수 없다.
-                const known = status !== undefined && !status.error;
+                const known = configured && status !== undefined && !status.error;
                 const state = !known ? 'idle' : running ? 'ok' : 'error';
                 const action = busy[process.id];
-                const badge = known ? autoRestartBadge(process, processStatus?.watch) : null;
+                const badge = known ? autoRestartBadge(process, processStatus?.watch, running) : null;
               // 로그 · INI 버튼: 실제로 쓰는 패턴(비워 두면 시작 스크립트 폴더 기준)을 마우스를 올리면 보여준다.
               const logPatterns = effectivePatterns(process, 'log');
               const iniPatterns = effectivePatterns(process, 'ini');
@@ -123,18 +131,24 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                 return (
                   <tr key={process.id} className={`server-card-row-${state}`}>
                     <td>
-                      <div className="server-card-process" title={`${process.label || process.id}\nmatch: ${process.match}`}>
+                      <div className="server-card-process" title={`${process.label || process.id}\n조건: ${describeCondition(process)}`}>
                         <span className={`status-dot status-${action ? 'loading' : state}`} />
                         <span className="server-card-process-name">{process.label || process.id}</span>
                         {known && !running && <span className="server-card-badge">STOPPED</span>}
+                        {!configured && (
+                          <button className="server-card-badge server-card-badge-muted" onClick={() => onEditWatch(process, processStatus)} title="실행 판단 조건이 없어 상태를 확인하지 않습니다 (눌러서 등록)">
+                            조건 없음
+                          </button>
+                        )}
                       </div>
                       {badge && (
                         <button
                           className={`server-card-watch server-card-watch-${badge.kind}`}
                           title={`${badge.title}\n(눌러서 바꾸기)`}
-                          onClick={() => onEditWatch(process, processStatus?.watch)}
+                          onClick={() => onEditWatch(process, processStatus)}
                         >
-                          ↻ {badge.text}
+                          <Icon name="refresh" />
+                          {badge.text}
                         </button>
                       )}
                     </td>
@@ -165,10 +179,10 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                             </button>
                             <button
                               className="btn-text"
-                              onClick={() => onEditWatch(process, processStatus?.watch)}
-                              title="자동 재시작 · 감시 조건"
+                              onClick={() => onEditWatch(process, processStatus)}
+                              title={`실행 판단 조건 · 자동 재시작\n${describeCondition(process)}`}
                             >
-                              감시
+                              조건
                             </button>
                             {known && !running && (
                               <button className="btn-text btn-text-ok" onClick={() => runAction(process, 'start')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>

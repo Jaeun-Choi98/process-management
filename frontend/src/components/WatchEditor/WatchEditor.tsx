@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { ProcessConfig, ProcessEntry, ProcessInstance, WatchStatus } from '../../types/config';
+import Icon from '../Icon/Icon';
+import { ProcessConfig, ProcessEntry, ProcessInstance, ServerStatus } from '../../types/config';
 import { requestApi } from '../../api/client';
 import './WatchEditor.css';
 
 interface WatchEditorProps {
   process: ProcessEntry;
   serverLabel: string;
-  /** 지금 감시 상태 (감시 조건이 없거나 확인 전이면 undefined) */
-  watch: WatchStatus | undefined;
+  /** 지금 상태 (확인 전이거나 접속 실패면 undefined) */
+  status: ServerStatus['processes'][number] | undefined;
   /** 저장에 성공하면 서버가 돌려준 전체 설정으로 화면을 갱신한다. */
   onSaved: (config: ProcessConfig) => void;
   onClose: () => void;
@@ -16,21 +17,33 @@ interface WatchEditorProps {
 /** 아래에서 process 를 프로세스 항목 이름으로 쓰므로 환경 변수는 여기서 읽어 둔다. */
 const PROCESSES_API = `${process.env.PUBLIC_URL}/api/processes`;
 
+/** 실행 판단 조건 방식: 이름 · 문자열(정확한 비교) 또는 정규식 */
+type Mode = 'text' | 'regex';
+
 /**
- * 모니터링 화면에서 프로세스 하나의 자동 재시작 · 감시 조건을 바꾼다.
- * '확인' 으로 지금 서버의 ps 에서 조건에 맞는 프로세스를 미리 보고 저장할 수 있다.
+ * 모니터링 화면에서 프로세스 하나의 실행 판단 조건과 자동 재시작을 바꾼다.
+ * 상태 표시 · 중지 · 자동 재시작이 모두 이 조건 하나를 쓴다.
+ * '지금 맞는 프로세스 확인' 으로 저장 전에 서버의 ps 에서 조건에 맞는 프로세스를 미리 볼 수 있다.
  */
-const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel, watch, onSaved, onClose }) => {
+const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel, status, onSaved, onClose }) => {
+  const [mode, setMode] = useState<Mode>(target.matchRegex ? 'regex' : 'text');
+  const [matchName, setMatchName] = useState(target.matchName ?? '');
+  const [matchArgs, setMatchArgs] = useState(target.matchArgs ?? '');
+  const [matchRegex, setMatchRegex] = useState(target.matchRegex ?? '');
   const [autoRestart, setAutoRestart] = useState(Boolean(target.autoRestart));
-  const [watchName, setWatchName] = useState(target.watchName ?? '');
-  const [watchArgs, setWatchArgs] = useState(target.watchArgs ?? '');
   /** '확인' 결과. 조건을 바꾸면 지운다. */
   const [found, setFound] = useState<ProcessInstance[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const hasCondition = watchName.trim() !== '' || watchArgs.trim() !== '';
+  // 고른 방식의 값만 보낸다. (다른 방식 칸에 남은 값은 저장하지 않는다)
+  const condition =
+    mode === 'regex'
+      ? { matchName: '', matchArgs: '', matchRegex: matchRegex.trim() }
+      : { matchName: matchName.trim(), matchArgs: matchArgs.trim(), matchRegex: '' };
+  const hasCondition = Boolean(condition.matchName || condition.matchArgs || condition.matchRegex);
   const base = `${PROCESSES_API}/${encodeURIComponent(target.id)}`;
+  const watch = status?.watch;
 
   useEffect(() => {
     const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -42,7 +55,7 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
     setBusy(true);
     setError(null);
     try {
-      const query = `name=${encodeURIComponent(watchName.trim())}&args=${encodeURIComponent(watchArgs.trim())}`;
+      const query = new URLSearchParams({ name: condition.matchName, args: condition.matchArgs, regex: condition.matchRegex });
       setFound((await requestApi<{ instances: ProcessInstance[] }>(`${base}/watch-test?${query}`)).instances);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -59,7 +72,7 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
         await requestApi<ProcessConfig>(`${base}/watch`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ autoRestart, watchName: watchName.trim(), watchArgs: watchArgs.trim() }),
+          body: JSON.stringify({ autoRestart, ...condition }),
         })
       );
       onClose();
@@ -73,54 +86,80 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
     setter(e.target.value);
     setFound(null);
   };
+  const changeMode = (next: Mode) => {
+    setMode(next);
+    setFound(null);
+  };
 
   return (
     <div className="watch-editor-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="watch-editor" role="dialog" aria-modal="true" aria-label="자동 재시작 설정">
+      <div className="watch-editor" role="dialog" aria-modal="true" aria-label="실행 조건 · 자동 재시작">
         <header className="watch-editor-header">
           <div>
             <strong>{target.label || target.id}</strong>
             <span>{serverLabel}</span>
+            <span>실행 조건 · 자동 재시작</span>
           </div>
           <button className="btn-icon" onClick={onClose} title="닫기 (Esc)">
-            ✕
+            <Icon name="close" />
           </button>
         </header>
 
         <div className="watch-editor-body">
-          {watch && (
+          {status && (
             <div className="watch-editor-status">
-              지금: 감시 프로세스 {watch.healthy ? '있음' : '없음'} · 자동 시작 {watch.restarts}회
-              {watch.lastRestartAt && ` (마지막 ${new Date(watch.lastRestartAt).toLocaleString()})`}
-              {watch.paused && ' · 화면에서 중지해 멈춘 상태 (시작 · 재시작하면 다시 켜집니다)'}
-              {watch.lastError && <div className="watch-editor-error-text">오류: {watch.lastError}</div>}
+              지금: 조건에 맞는 프로세스 {status.instances.length}개
+              {watch && ` · 자동 시작 ${watch.restarts}회`}
+              {watch?.lastRestartAt && ` (마지막 ${new Date(watch.lastRestartAt).toLocaleString()})`}
+              {watch?.paused && ' · 화면에서 중지해 자동 재시작이 멈춘 상태 (시작 · 재시작하면 다시 켜집니다)'}
+              {watch?.lastError && <div className="watch-editor-error-text">오류: {watch.lastError}</div>}
             </div>
           )}
 
-          <label className="watch-editor-check">
-            <input type="checkbox" checked={autoRestart} onChange={e => setAutoRestart(e.target.checked)} />
-            자동 재시작 — 감시 프로세스가 없으면 시작 스크립트를 실행합니다
-          </label>
-          {autoRestart && !target.startScript && (
-            <div className="watch-editor-warn">시작 스크립트가 등록되지 않았습니다. ⚙ 설정에서 먼저 등록하세요.</div>
-          )}
+          <fieldset className="watch-editor-mode">
+            <legend>실행 판단 조건 — 화면의 상태 · 중지 대상 · 자동 재시작이 모두 이 조건을 씁니다</legend>
+            <label>
+              <input type="radio" name="mode" checked={mode === 'text'} onChange={() => changeMode('text')} />
+              이름 · 문자열 (권장)
+            </label>
+            <label>
+              <input type="radio" name="mode" checked={mode === 'regex'} onChange={() => changeMode('regex')} />
+              정규식
+            </label>
+          </fieldset>
 
-          <label className="watch-editor-field">
-            <span>감시 문자열</span>
-            <input
-              className="input"
-              placeholder="-jar /opt/app/app.jar"
-              value={watchArgs}
-              onChange={changeCondition(setWatchArgs)}
-              autoFocus
-            />
-            <small>ps 명령줄에 들어 있어야 하는 글자 (정규식 아님). 이 프로세스만 가진 글자로 적으세요.</small>
-          </label>
-          <label className="watch-editor-field">
-            <span>감시 이름 (선택)</span>
-            <input className="input" placeholder="java" value={watchName} onChange={changeCondition(setWatchName)} />
-            <small>실행 파일 이름. 적으면 명령줄 첫 단어의 파일 이름이 정확히 같아야 합니다.</small>
-          </label>
+          {mode === 'text' ? (
+            <>
+              <label className="watch-editor-field">
+                <span>명령줄 문자열</span>
+                <input
+                  className="input"
+                  placeholder="-jar /opt/app/app.jar"
+                  value={matchArgs}
+                  onChange={changeCondition(setMatchArgs)}
+                  autoFocus
+                />
+                <small>ps 명령줄에 들어 있어야 하는 글자 (정규식 아님). 이 프로세스만 가진 글자로 적으세요.</small>
+              </label>
+              <label className="watch-editor-field">
+                <span>실행 이름 (선택)</span>
+                <input className="input" placeholder="java" value={matchName} onChange={changeCondition(setMatchName)} />
+                <small>실행 파일 이름. 적으면 명령줄 첫 단어의 파일 이름이 정확히 같아야 합니다. 둘 다 적으면 둘 다 맞아야 합니다.</small>
+              </label>
+            </>
+          ) : (
+            <label className="watch-editor-field">
+              <span>정규식</span>
+              <input
+                className="input"
+                placeholder="java .*app\.jar"
+                value={matchRegex}
+                onChange={changeCondition(setMatchRegex)}
+                autoFocus
+              />
+              <small>ps 명령줄 전체에 대한 정규식. 이름 · 문자열로 구분할 수 없을 때만 쓰세요.</small>
+            </label>
+          )}
 
           <div className="watch-editor-test">
             <button className="btn btn-secondary" onClick={test} disabled={!hasCondition || busy}>
@@ -129,7 +168,7 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
             {found && (
               <span className={found.length === 1 ? 'watch-editor-ok-text' : 'watch-editor-warn-text'}>
                 {found.length === 0 ? '맞는 프로세스가 없습니다' : `${found.length}개`}
-                {found.length > 1 && ' — 여러 개가 맞습니다. 다른 프로세스가 섞이지 않았는지 보세요'}
+                {found.length > 1 && ' — 여러 개가 맞습니다. 다른 프로세스가 섞이지 않았는지 보세요 (중지하면 모두 중지됩니다)'}
               </span>
             )}
           </div>
@@ -142,6 +181,15 @@ const WatchEditor: React.FC<WatchEditorProps> = ({ process: target, serverLabel,
               ))}
             </ul>
           )}
+
+          <label className="watch-editor-check">
+            <input type="checkbox" checked={autoRestart} onChange={e => setAutoRestart(e.target.checked)} />
+            자동 재시작 — 조건에 맞는 프로세스가 없으면 시작 스크립트를 실행합니다
+          </label>
+          {autoRestart && !target.startScript && (
+            <div className="watch-editor-warn">시작 스크립트가 등록되지 않았습니다. 설정에서 먼저 등록하세요.</div>
+          )}
+          {autoRestart && !hasCondition && <div className="watch-editor-warn">자동 재시작에는 실행 판단 조건이 필요합니다.</div>}
 
           {error && <div className="watch-editor-error">{error}</div>}
         </div>
