@@ -19,13 +19,15 @@ interface StatusSidebarProps {
   view: { group: GroupEntry; servers: ServerView[] }[];
   /** 클릭한 서버 카드(또는 그룹)의 DOM id 를 넘긴다. */
   onSelect: (domId: string) => void;
+  /** 서버 목록 아래에 붙일 내용 (소개 · API 명세 버튼) */
+  footer?: React.ReactNode;
 }
 
 /**
  * 서버별 상태를 점 색으로 한눈에 보여주고, 클릭하면 해당 서버 카드(그룹)로 이동한다.
  * 순서는 설정 파일 순서를 따른다.
  */
-const StatusSidebar: React.FC<StatusSidebarProps> = ({ view, onSelect }) => {
+const StatusSidebar: React.FC<StatusSidebarProps> = ({ view, onSelect, footer }) => {
   const servers = view.flatMap(v => v.servers);
   const processCount = servers.reduce((sum, s) => sum + s.processes.length, 0);
   const stoppedCount = servers.reduce((sum, s) => sum + s.stopped, 0);
@@ -82,6 +84,8 @@ const StatusSidebar: React.FC<StatusSidebarProps> = ({ view, onSelect }) => {
           </section>
         );
       })}
+
+      {footer && <div className="status-sidebar-footer">{footer}</div>}
     </aside>
   );
 };

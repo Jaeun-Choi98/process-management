@@ -4,7 +4,7 @@ import Header from '../components/Header/Header';
 import ConfigEditor from '../components/ConfigEditor/ConfigEditor';
 import LogViewer, { FileRoot } from '../components/LogViewer/LogViewer';
 import WatchEditor from '../components/WatchEditor/WatchEditor';
-import MarkdownPanel from '../components/MarkdownPanel/MarkdownPanel';
+import MarkdownDialog from '../components/MarkdownDialog/MarkdownDialog';
 import ProgramUpdate from '../components/ProgramUpdate/ProgramUpdate';
 import ProgramInstall from '../components/ProgramInstall/ProgramInstall';
 import ServerCard from '../components/ServerCard/ServerCard';
@@ -16,6 +16,12 @@ import { useProcessConfig } from '../hooks/useProcessConfig';
 import './Dashboard.css';
 
 const FOCUSED_CLASS = 'card-focused';
+
+/** 사이드바 아래 안내문 버튼 (public/config 의 md 파일) */
+const DOCS = [
+  { file: 'README.md', title: '소개 · 사용 방법', icon: 'book' },
+  { file: 'API.md', title: 'API 명세 (프론트 · 백엔드)', icon: 'code' },
+] as const;
 
 interface DashboardProps {
   /** URL 의 그룹 slug. "all" 이면 전체 그룹 */
@@ -37,6 +43,8 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   } | null>(null);
   /** 열려 있는 프로그램 업데이트 창의 서버 */
   const [updateTarget, setUpdateTarget] = useState<ServerEntry | null>(null);
+  /** 열려 있는 안내문 팝업 */
+  const [doc, setDoc] = useState<(typeof DOCS)[number] | null>(null);
   /** 열려 있는 프로그램 설치 창의 서버 */
   const [installTarget, setInstallTarget] = useState<ServerEntry | null>(null);
   /** 검색에 가려진 카드를 골랐을 때, 검색을 지우고 다시 그려진 뒤 스크롤할 대상 */
@@ -88,6 +96,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   const closeWatch = useCallback(() => setWatchTarget(null), []);
   const closeUpdate = useCallback(() => setUpdateTarget(null), []);
   const closeInstall = useCallback(() => setInstallTarget(null), []);
+  const closeDoc = useCallback(() => setDoc(null), []);
   /** 화면 밖(설치 · 자동 조건)에서 설정이 바뀌면 서버가 돌려준 설정으로 바꾸고 상태를 다시 읽는다. */
   const applyConfig = useCallback(
     (next: ProcessConfig) => {
@@ -144,7 +153,18 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
       <Header groups={groups} currentSlug={slug} navigate={navigate} />
       <div className="page">
         <div className="dashboard-layout">
-          {view.some(v => v.servers.length > 0) && <StatusSidebar view={view} onSelect={scrollToElement} />}
+          {config && (
+            <StatusSidebar
+              view={view}
+              onSelect={scrollToElement}
+              footer={DOCS.map(d => (
+                <button key={d.file} type="button" className="status-sidebar-link" onClick={() => setDoc(d)}>
+                  <Icon name={d.icon} />
+                  {d.title}
+                </button>
+              ))}
+            />
+          )}
 
           <div className="dashboard-main">
             <div className="dashboard-toolbar">
@@ -167,8 +187,6 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
               </div>
             </div>
 
-            <MarkdownPanel file="README.md" icon="book" title="소개 · 사용 방법" defaultOpen />
-            <MarkdownPanel file="API.md" icon="code" title="API 명세 (프론트 · 백엔드)" defaultOpen={false} />
 
             {error && (
               <div className="api-error">
@@ -247,6 +265,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
           onClose={closeWatch}
         />
       )}
+      {doc && <MarkdownDialog file={doc.file} title={doc.title} icon={doc.icon} onClose={closeDoc} />}
       {installTarget && (
         <ProgramInstall
           server={installTarget}

@@ -145,9 +145,9 @@
 
 ### 사이트 안내문 (config/README.md, config/API.md)
 
-`public/config/README.md` 는 화면 위에 보이는 소개 · 사용 방법이고(처음엔 펼침), `public/config/API.md` 는
-그 아래의 API 명세입니다(처음엔 접힘). 파일을 고치고 새로고침하면 바로 반영되고(빌드한 경우
-`build/config/README.md`), 파일을 지우면 패널도 사라집니다. 제목, 목록, 코드, 표, 인용, `**굵게**`,
+`public/config/README.md` 는 소개 · 사용 방법, `public/config/API.md` 는 API 명세입니다. 왼쪽 상태 사이드바 아래의
+`소개 · 사용 방법` · `API 명세` 버튼을 누르면 팝업으로 보입니다. 파일을 고치면 다시 열 때 바로 반영되고(빌드한 경우
+`build/config/README.md`), 파일이 없으면 팝업에 "안내문이 없습니다" 가 보입니다. 제목, 목록, 코드, 표, 인용, `**굵게**`,
 `[링크](https://...)` 정도의 마크다운만 지원하며, HTML 태그는 글자로 그대로 보입니다.
 **API 를 바꾸면 `API.md` 도 같이 고쳐야 합니다.**
 
@@ -205,7 +205,7 @@ frontend/src/
     IniEditor/               INI 파일 편집 · 저장 (CRLF 유지, 동시 수정 감지)
     WatchEditor/             '조건' 창: 실행 판단 조건 · 자동 재시작 변경, 지금 맞는 프로세스 확인
     ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기 (그룹 주소에서는 그 그룹만)
-    MarkdownPanel/           config/README.md · API.md 를 접이식 패널로 표시
+    MarkdownDialog/          config/README.md · API.md 를 팝업으로 표시 (사이드바 아래 버튼)
   pages/Dashboard.tsx        그룹 → 서버 → 프로세스 화면 구성, 검색, 사이드바 이동
   App.tsx                    경로 라우팅 (/ → /all)
   setupProxy.js              npm start 에서 /api 를 Go 서버로 전달

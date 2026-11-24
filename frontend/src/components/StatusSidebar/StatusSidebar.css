@@ -168,3 +168,31 @@
     border-left: none;
   }
 }
+
+/* 서버 목록 아래: 소개 · API 명세 버튼 */
+.status-sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.status-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+}
+
+.status-sidebar-link:hover { background: var(--surface-2); }

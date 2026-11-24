@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import Icon, { IconName } from '../Icon/Icon';
-import './MarkdownPanel.css';
+import './MarkdownDialog.css';
 
-interface MarkdownPanelProps {
-  /** public/config 아래의 md 파일 이름 (예: README.md). 파일이 없으면 패널을 그리지 않는다. */
+interface MarkdownDialogProps {
+  /** public/config 아래의 md 파일 이름 (예: README.md) */
   file: string;
   title: string;
   /** 제목 앞 아이콘 */
   icon?: IconName;
-  /** 처음 들어왔을 때 펼쳐 둘지. 이후에는 사용자가 접고 편 상태를 브라우저에 기억한다. */
-  defaultOpen: boolean;
+  onClose: () => void;
 }
 
 /**
@@ -83,60 +82,54 @@ function renderMarkdown(markdown: string): string {
   return html.join('\n');
 }
 
-/** config 폴더의 md 파일(소개, API 명세 등)을 대시보드 위에 접고 펼 수 있는 패널로 보여준다. */
-const MarkdownPanel: React.FC<MarkdownPanelProps> = ({ file, title, icon, defaultOpen }) => {
+/** config 폴더의 md 파일(소개, API 명세 등)을 팝업 창으로 보여준다. Esc 나 바깥을 누르면 닫힌다. */
+const MarkdownDialog: React.FC<MarkdownDialogProps> = ({ file, title, icon, onClose }) => {
   const url = `${process.env.PUBLIC_URL}/config/${file}`;
-  const openStorageKey = `process-management.panel-open.${file}`;
-  const [html, setHtml] = useState<string | null>(null);
-  const [open, setOpen] = useState(() => {
-    try {
-      const saved = localStorage.getItem(openStorageKey);
-      return saved === null ? defaultOpen : saved === 'true';
-    } catch {
-      return defaultOpen;
-    }
-  });
+  /** null: 읽는 중 */
+  const [content, setContent] = useState<{ html: string } | { error: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     fetch(url, { cache: 'no-store', signal: controller.signal })
       .then(async response => {
-        // 파일이 없으면 Go 서버는 404 를, 개발 서버는 index.html 을 돌려준다. 이때는 패널을 그리지 않는다.
+        // 파일이 없으면 Go 서버는 404 를, 개발 서버는 index.html 을 돌려준다.
         const isHtml = (response.headers.get('content-type') ?? '').includes('text/html');
-        if (response.ok && !isHtml) setHtml(renderMarkdown(await response.text()));
+        setContent(response.ok && !isHtml ? { html: renderMarkdown(await response.text()) } : { error: `안내문(${file})이 없습니다.` });
       })
-      .catch(() => {
-        // 안내문이 없어도 대시보드는 그대로 동작해야 하므로 무시한다.
+      .catch(e => {
+        if (!controller.signal.aborted) setContent({ error: `안내문을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
       });
     return () => controller.abort();
-  }, [url]);
+  }, [url, file]);
 
-  if (html === null) return null;
-
-  const toggle = () => {
-    setOpen(!open);
-    try {
-      localStorage.setItem(openStorageKey, String(!open));
-    } catch {
-      // 저장소를 못 쓰면(시크릿 창 등) 이번 방문 동안만 기억한다.
-    }
-  };
+  useEffect(() => {
+    const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
 
   return (
-    <section className="markdown-panel">
-      <button type="button" className="markdown-panel-toggle" onClick={toggle} aria-expanded={open}>
-        <span className="markdown-panel-title">
-          {icon && <Icon name={icon} />}
-          {title}
-        </span>
-        <span className="markdown-panel-caret">
-          {open ? '접기' : '펼치기'}
-          <Icon name={open ? 'chevron-up' : 'chevron-down'} />
-        </span>
-      </button>
-      {open && <div className="markdown-panel-body" dangerouslySetInnerHTML={{ __html: html }} />}
-    </section>
+    <div className="markdown-dialog-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="markdown-dialog" role="dialog" aria-modal="true" aria-label={title}>
+        <header className="markdown-dialog-header">
+          <strong>
+            {icon && <Icon name={icon} />}
+            {title}
+          </strong>
+          <button className="btn-icon" onClick={onClose} title="닫기 (Esc)">
+            <Icon name="close" />
+          </button>
+        </header>
+        {content === null ? (
+          <div className="markdown-dialog-placeholder">불러오는 중...</div>
+        ) : 'error' in content ? (
+          <div className="markdown-dialog-placeholder">{content.error}</div>
+        ) : (
+          <div className="markdown-dialog-body" dangerouslySetInnerHTML={{ __html: content.html }} />
+        )}
+      </div>
+    </div>
   );
 };
 
-export default MarkdownPanel;
+export default MarkdownDialog;
