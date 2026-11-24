@@ -181,6 +181,30 @@
 
 .program-update-warn { color: var(--warning); }
 
+/* 올리기 진행률 */
+.program-update-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+}
+
+.program-update-progress progress {
+  flex: 1;
+  min-width: 160px;
+  max-width: 360px;
+  height: 6px;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.program-update-progress progress::-webkit-progress-bar { background: var(--surface-2); }
+.program-update-progress progress::-webkit-progress-value { background: var(--accent); }
+.program-update-progress progress::-moz-progress-bar { background: var(--accent); }
+
 .program-update-ok,
 .program-update-error {
   padding: 6px 10px;

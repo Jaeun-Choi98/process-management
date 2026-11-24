@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import { RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from '../../types/config';
-import { requestApi } from '../../api/client';
+import { requestApi, uploadApi } from '../../api/client';
 import { buildTar, TarEntry } from '../../utils/tar';
 import { formatDateTime, formatSize } from '../../utils/format';
 import './ProgramUpdate.css';
@@ -99,6 +99,8 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<UpdateResult | null>(null);
+  /** 올린 바이트 수 / 전체. 다 올린 뒤에는 서버가 확인하고 바꾸는 동안 기다린다. */
+  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
 
   const loadRemote = useCallback(
     async (path: string) => {
@@ -168,20 +170,23 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
     setResult(null);
     try {
       const body = buildTar(tarEntries(localSelected, name));
+      setProgress({ loaded: 0, total: body.size });
       const query = new URLSearchParams({ path: remoteSelected.path, kind: remoteSelectedKind });
-      const updated = await requestApi<UpdateResult>(`${base}/update?${query}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-tar' },
-        body,
-      });
+      const updated = await uploadApi<UpdateResult>(`${base}/update?${query}`, body, 'application/x-tar', (loaded, total) =>
+        setProgress({ loaded, total })
+      );
       setResult(updated);
       await loadRemote(remote?.path ?? '');
     } catch (e) {
       setError(`업데이트하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
+
+  const uploaded = progress !== null && progress.loaded >= progress.total;
+  const percent = progress && progress.total > 0 ? Math.floor((progress.loaded / progress.total) * 100) : 0;
 
   /** 목록의 한 줄: 누르면 선택, 두 번 누르거나 Enter 면 폴더를 연다. */
   const row = (key: string, kind: Kind | null, name: string, selected: boolean, onSelect: () => void, onOpen: (() => void) | null, meta: React.ReactNode) => (
@@ -335,6 +340,16 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
                 폴더는 폴더로, 파일은 파일로만 바꿀 수 있습니다. (서버: {KIND_TEXT[remoteSelectedKind!]}, 내 PC: {KIND_TEXT[localSelected!.kind]})
               </div>
             )}
+            {progress && (
+              <div className="program-update-progress">
+                <progress value={progress.loaded} max={progress.total || 1} />
+                <span>
+                  {uploaded
+                    ? '다 올렸습니다. 서버에서 확인하고 바꾸는 중...'
+                    : `올리는 중 ${formatSize(progress.loaded)} / ${formatSize(progress.total)} (${percent}%)`}
+                </span>
+              </div>
+            )}
             {error && <div className="program-update-error">{error}</div>}
             {result && (
               <div className="program-update-ok">
@@ -349,7 +364,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
             </button>
             <button className="btn btn-primary" onClick={runUpdate} disabled={!ready}>
               <Icon name="upload" />
-              {busy ? '올리는 중...' : '프로그램 업데이트'}
+              {busy ? (uploaded ? '바꾸는 중...' : `올리는 중 ${percent}%`) : '프로그램 업데이트'}
             </button>
           </div>
         </footer>
