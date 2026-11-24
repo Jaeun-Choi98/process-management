@@ -1,17 +1,38 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
-import { RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from '../../types/config';
+import { ProcessEntry, RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from '../../types/config';
 import { requestApi, uploadApi } from '../../api/client';
 import { buildTar, TarEntry } from '../../utils/tar';
 import { formatDateTime, formatSize } from '../../utils/format';
+import { hasCondition } from '../../utils/schema';
 import './ProgramUpdate.css';
 
 interface ProgramUpdateProps {
   server: ServerEntry;
+  /** 이 서버의 프로세스 (업데이트 후 재시작할 대상 고르기) */
+  processes: ProcessEntry[];
+  /** 재시작한 뒤 호출한다. (상태 새로고침) */
+  onRestarted: () => void;
   onClose: () => void;
 }
 
 const SERVERS_API = `${process.env.PUBLIC_URL}/api/servers`;
+const PROCESSES_API = `${process.env.PUBLIC_URL}/api/processes`;
+
+/** 재시작할 수 없는 이유. 재시작은 실행 판단 조건으로 중지한 뒤 시작 스크립트를 실행한다. */
+const restartProblem = (p: ProcessEntry) =>
+  !p.startScript ? '시작 스크립트가 없습니다' : !hasCondition(p) ? '실행 판단 조건이 없습니다' : null;
+
+/**
+ * 업데이트 대상과 관련 있어 보이는 프로세스: 시작 스크립트가 바꾸는 폴더 안에 있거나(폴더),
+ * 바꾸는 파일과 같은 폴더에 있는(파일) 프로세스. 경로는 글자로만 비교하므로 처음 체크 상태로만 쓴다.
+ */
+const isRelated = (p: ProcessEntry, target: string, kind: Kind) => {
+  const script = p.startScript ?? '';
+  return kind === 'dir' ? script.startsWith(`${target}/`) : script.startsWith(`${target.slice(0, target.lastIndexOf('/'))}/`);
+};
+
+type RestartResult = { name: string; ok: boolean; text: string };
 
 type Kind = 'dir' | 'file';
 const KIND_TEXT: Record<Kind, string> = { dir: '폴더', file: '파일' };
@@ -81,7 +102,7 @@ const describeLocal = (node: LocalNode) =>
  * 양쪽에서 하나씩 고르고 '프로그램 업데이트' 를 누르면 서버의 대상은 '<이름>.bak.<날짜-시각>' 으로 남고
  * 내 PC 의 내용이 같은 이름으로 올라간다. 폴더는 폴더로, 파일은 파일로만 바꿀 수 있다.
  */
-const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
+const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRestarted, onClose }) => {
   const base = `${SERVERS_API}/${encodeURIComponent(server.id)}`;
   const serverLabel = server.label || server.id;
 
@@ -99,6 +120,11 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<UpdateResult | null>(null);
+  /** 업데이트 후 재시작할 프로세스 id */
+  const [restartIds, setRestartIds] = useState<Set<string>>(new Set());
+  /** 업데이트 후 재시작 중인 프로세스 이름 (진행 표시) */
+  const [restarting, setRestarting] = useState<string | null>(null);
+  const [restartResults, setRestartResults] = useState<RestartResult[]>([]);
   /** 올린 바이트 수 / 전체. 다 올린 뒤에는 서버가 확인하고 바꾸는 동안 기다린다. */
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
 
@@ -146,6 +172,44 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
     setResult(null);
   };
 
+  // 서버 쪽 대상을 고르면 관련 있어 보이는 프로세스를 재시작 대상으로 미리 체크한다.
+  const remoteSelectedPath = remoteSelected?.path;
+  const remoteSelectedType = remoteSelected ? remoteKind(remoteSelected) : null;
+  useEffect(() => {
+    if (!remoteSelectedPath || !remoteSelectedType) return;
+    setRestartIds(new Set(processes.filter(p => !restartProblem(p) && isRelated(p, remoteSelectedPath, remoteSelectedType)).map(p => p.id)));
+  }, [remoteSelectedPath, remoteSelectedType, processes]);
+
+  const toggleRestart = (id: string, checked: boolean) =>
+    setRestartIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  /** 고른 프로세스를 하나씩 재시작한다. 실패해도 나머지는 계속한다. */
+  const restartSelected = async (targets: ProcessEntry[]) => {
+    const results: RestartResult[] = [];
+    for (const p of targets) {
+      const name = p.label || p.id;
+      setRestarting(name);
+      try {
+        const response = await requestApi<{ message: string }>(`${PROCESSES_API}/${encodeURIComponent(p.id)}/restart`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        results.push({ name, ok: true, text: response.message });
+      } catch (e) {
+        results.push({ name, ok: false, text: e instanceof Error ? e.message : String(e) });
+      }
+      setRestartResults([...results]);
+    }
+    setRestarting(null);
+    onRestarted();
+  };
+
   const localDir = localPath[localPath.length - 1];
   const remoteSelectedKind = remoteSelected ? remoteKind(remoteSelected) : null;
   const mismatch = remoteSelectedKind !== null && localSelected !== null && remoteSelectedKind !== localSelected.kind;
@@ -155,12 +219,16 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
     if (!remoteSelected || !localSelected || !remoteSelectedKind) return;
     const name = baseName(remoteSelected.path);
     const kindText = KIND_TEXT[remoteSelectedKind];
+    const restartTargets = processes.filter(p => restartIds.has(p.id) && !restartProblem(p));
     if (
       !window.confirm(
         `${serverLabel} 의 ${kindText}\n${remoteSelected.path}\n\n` +
           `내 PC 의 '${localSelected.name}' (${describeLocal(localSelected)}) 로 바꿀까요?\n` +
           `기존 ${kindText}은(는) ${name}.bak.<날짜-시각> 으로 이름을 바꿔 남깁니다.` +
-          (localSelected.name !== name ? `\n올라간 ${kindText}의 이름은 서버 쪽 이름(${name})을 따릅니다.` : '')
+          (localSelected.name !== name ? `\n올라간 ${kindText}의 이름은 서버 쪽 이름(${name})을 따릅니다.` : '') +
+          (restartTargets.length > 0
+            ? `\n\n업데이트가 끝나면 다음 프로세스를 재시작합니다: ${restartTargets.map(p => p.label || p.id).join(', ')}`
+            : '\n\n재시작할 프로세스를 고르지 않았습니다. (프로세스는 그대로 실행됩니다)')
       )
     )
       return;
@@ -168,6 +236,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
     setBusy(true);
     setError(null);
     setResult(null);
+    setRestartResults([]);
     try {
       const body = buildTar(tarEntries(localSelected, name));
       setProgress({ loaded: 0, total: body.size });
@@ -176,12 +245,19 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
         setProgress({ loaded, total })
       );
       setResult(updated);
-      await loadRemote(remote?.path ?? '');
     } catch (e) {
+      // 업데이트가 실패하면 재시작하지 않는다.
       setError(`업데이트하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
       setBusy(false);
       setProgress(null);
+      return;
+    }
+    setProgress(null);
+    try {
+      if (restartTargets.length > 0) await restartSelected(restartTargets);
+      await loadRemote(remote?.path ?? '');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -335,6 +411,21 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
                 <em>올릴 폴더 · 파일을 고르세요</em>
               )}
             </div>
+            {processes.length > 0 && (
+              <fieldset className="program-update-restart" disabled={busy}>
+                <legend>업데이트 후 재시작</legend>
+                {processes.map(p => {
+                  const problem = restartProblem(p);
+                  return (
+                    <label key={p.id} title={problem ?? p.startScript}>
+                      <input type="checkbox" checked={!problem && restartIds.has(p.id)} disabled={problem !== null} onChange={e => toggleRestart(p.id, e.target.checked)} />
+                      {p.label || p.id}
+                      {problem && <em> ({problem})</em>}
+                    </label>
+                  );
+                })}
+              </fieldset>
+            )}
             {mismatch && (
               <div className="program-update-warn">
                 폴더는 폴더로, 파일은 파일로만 바꿀 수 있습니다. (서버: {KIND_TEXT[remoteSelectedKind!]}, 내 PC: {KIND_TEXT[localSelected!.kind]})
@@ -354,9 +445,15 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
             {result && (
               <div className="program-update-ok">
                 업데이트했습니다: {result.path} (파일 {result.files.toLocaleString()}개, {formatSize(result.bytes)}). 이전 내용은 {result.backup} 에 있습니다.
-                실행 중인 프로세스는 다시 시작해야 반영됩니다.
+                {restartResults.length === 0 && !restarting && ' 재시작한 프로세스는 없습니다. (실행 중이면 다시 시작해야 반영됩니다)'}
               </div>
             )}
+            {restarting && <div className="program-update-progress">재시작 중: {restarting}...</div>}
+            {restartResults.map(r => (
+              <div key={r.name} className={r.ok ? 'program-update-ok' : 'program-update-error'}>
+                {r.name} 재시작: {r.text}
+              </div>
+            ))}
           </div>
           <div className="program-update-actions">
             <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
@@ -364,7 +461,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, onClose }) => {
             </button>
             <button className="btn btn-primary" onClick={runUpdate} disabled={!ready}>
               <Icon name="upload" />
-              {busy ? (uploaded ? '바꾸는 중...' : `올리는 중 ${percent}%`) : '프로그램 업데이트'}
+              {busy ? (restarting ? '재시작 중...' : uploaded ? '바꾸는 중...' : `올리는 중 ${percent}%`) : '프로그램 업데이트'}
             </button>
           </div>
         </footer>

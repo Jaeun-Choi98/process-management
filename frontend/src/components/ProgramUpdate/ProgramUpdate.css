@@ -181,6 +181,33 @@
 
 .program-update-warn { color: var(--warning); }
 
+/* 업데이트 후 재시작할 프로세스 */
+.program-update-restart {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 4px 0 0;
+  padding: 0;
+  border: none;
+}
+
+.program-update-restart legend {
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.program-update-restart label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.program-update-restart em {
+  font-style: normal;
+  color: var(--text-muted);
+}
+
 /* 올리기 진행률 */
 .program-update-progress {
   display: flex;

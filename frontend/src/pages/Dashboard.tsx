@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Icon from '../components/Icon/Icon';
 import Header from '../components/Header/Header';
 import ConfigEditor from '../components/ConfigEditor/ConfigEditor';
@@ -84,6 +84,11 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   const closeFiles = useCallback(() => setFileTarget(null), []);
   const closeWatch = useCallback(() => setWatchTarget(null), []);
   const closeUpdate = useCallback(() => setUpdateTarget(null), []);
+  // 상태 새로고침마다 새 배열이 되면 업데이트 창의 재시작 체크가 초기화되므로 설정이 바뀔 때만 다시 만든다.
+  const updateProcesses = useMemo(
+    () => (updateTarget ? (config?.processes ?? []).filter(p => p.server === updateTarget.id) : []),
+    [config, updateTarget]
+  );
 
   // 다른 그룹으로 이동하면 검색을 지운다.
   useEffect(() => setFilter(''), [slug]);
@@ -228,7 +233,14 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
           onClose={closeWatch}
         />
       )}
-      {updateTarget && <ProgramUpdate server={updateTarget} onClose={closeUpdate} />}
+      {updateTarget && (
+        <ProgramUpdate
+          server={updateTarget}
+          processes={updateProcesses}
+          onRestarted={status.refresh}
+          onClose={closeUpdate}
+        />
+      )}
     </div>
   );
 };
