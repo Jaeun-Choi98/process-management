@@ -5,6 +5,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_RESTART_DELAY_MS,
   DEFAULT_WATCH_INTERVAL_MS,
+  baseDirOf,
   migrateLegacyMatch,
   scriptPath,
   validateProcessConfig,
@@ -58,7 +59,7 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     title: '서버',
     description:
       'SSH 비밀번호는 서버 파일에만 저장되고 화면에는 다시 보이지 않습니다. 바꿀 때만 입력하세요. host · port · user 를 바꾸면 다시 입력해야 합니다. ' +
-      '기본 폴더(프로그램이 설치된 폴더)를 적어 두면 프로세스의 시작 스크립트는 파일 이름만 적으면 되고, 찾아보기 · 프로그램 업데이트도 그 폴더에서 시작합니다.',
+      '기본 폴더(프로그램이 설치된 폴더)는 비워 두면 /home/<user> (root 는 /root) 입니다. 프로세스의 시작 스크립트는 이 폴더 기준 파일 이름만 적으면 되고, 찾아보기 · 프로그램 업데이트도 이 폴더에서 시작합니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'group', title: '그룹 *', type: 'select' },
@@ -67,7 +68,7 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
       { field: 'port', title: 'port', placeholder: '22', type: 'number', className: 'config-editor-col-narrow' },
       { field: 'user', title: 'user *', placeholder: 'ops' },
       { field: 'password', title: '비밀번호 *', type: 'password' },
-      { field: 'baseDir', title: '기본 폴더', placeholder: '/home/ops/app', className: 'config-editor-col-wide' },
+      { field: 'baseDir', title: '기본 폴더', className: 'config-editor-col-wide' },
     ],
   },
   {
@@ -75,16 +76,16 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     title: '프로세스',
     description:
       '시작 스크립트는 [찾아보기]로 서버에서 고르거나, 서버 기본 폴더 기준 파일 이름(start.sh, bin/start.sh) 또는 / 로 시작하는 전체 경로로 적습니다. ' +
-      '로그 · INI 파일은 비워 두면 시작 스크립트 폴더 아래의 *.log(5단계) · *.ini(3단계)를 찾습니다. ' +
-      '다른 곳을 보려면 패턴을 적습니다: 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로는 그대로. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않습니다. ' +
+      '로그 · INI 파일은 비워 두면 알아서 찾습니다: 로그는 시작 스크립트 폴더의 한 단계 위 폴더부터 *.log(6단계), INI 는 시작 스크립트 폴더부터 *.ini(3단계). ' +
+      '다른 곳을 보려면 [찾아보기]로 로그 폴더 · INI 파일을 고릅니다. (직접 적을 때: 상대 경로는 시작 스크립트 폴더 기준, 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않습니다) ' +
       '실행 중인지 판단하는 조건과 자동 재시작은 저장한 뒤 모니터링 화면의 각 프로세스 [조건] 에서 정합니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
       { field: 'startScript', title: '시작 스크립트', placeholder: 'start.sh 또는 /opt/app/start.sh', className: 'config-editor-col-wide' },
-      { field: 'logFiles', title: '로그 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.log', className: 'config-editor-col-wide' },
-      { field: 'iniFiles', title: 'INI 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.ini', className: 'config-editor-col-wide' },
+      { field: 'logFiles', title: '로그 (선택)', placeholder: '비우면 자동으로 찾음', className: 'config-editor-col-wide' },
+      { field: 'iniFiles', title: 'INI 파일 (선택)', placeholder: '비우면 자동으로 찾음', className: 'config-editor-col-wide' },
     ],
   },
 ];
@@ -103,6 +104,14 @@ const legacyPatterns = (process: object) => {
     logFiles: logDir ? [`${logDir}/*`, `${logDir}/*/*`] : logFile ? [logFile] : [],
     iniFiles: configDir ? [`${configDir}/*.ini`, `${configDir}/*/*.ini`] : [],
   };
+};
+
+/** 찾아보기로 채우는 프로세스 칸 */
+type PickField = 'startScript' | 'logFiles' | 'iniFiles';
+const PICK_TEXT: Record<PickField, { title: string; help: string }> = {
+  startScript: { title: '시작 스크립트 고르기', help: '서버에서 시작 스크립트를 고릅니다' },
+  logFiles: { title: '로그 폴더 고르기', help: '서버에서 로그가 쌓이는 폴더를 고릅니다 (그 폴더와 한 단계 아래의 파일을 봅니다)' },
+  iniFiles: { title: 'INI 파일 고르기', help: '서버에서 INI 파일을 고릅니다 (여러 번 고르면 더해집니다)' },
 };
 
 const SECTION_TITLE: Record<Section, string> = { groups: '그룹', servers: '서버', processes: '프로세스' };
@@ -179,8 +188,15 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  /** 시작 스크립트 찾아보기 창 (어느 프로세스 행의 값을 채울지) */
-  const [picker, setPicker] = useState<{ rowKey: string; serverId: string; serverLabel: string; baseDir: string } | null>(null);
+  /** 찾아보기 창: 어느 프로세스 행의 어느 칸(시작 스크립트 · 로그 폴더 · INI 파일)을 채울지 */
+  const [picker, setPicker] = useState<{
+    rowKey: string;
+    field: PickField;
+    serverId: string;
+    serverLabel: string;
+    baseDir: string;
+    startDir: string;
+  } | null>(null);
 
   /** 서버에 저장되어 있는 서버 정보 (비밀번호가 저장되어 있는지 판단용) */
   const savedServers = useMemo(() => new Map(config.servers.map(s => [s.id, s])), [config.servers]);
@@ -209,12 +225,22 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
     return null;
   };
 
-  /** 고른 파일 경로를 기본 폴더 아래면 상대 경로로 바꿔 넣는다. */
-  const pickStartScript = (path: string) => {
+  /**
+   * 찾아보기로 고른 경로를 칸에 넣는다.
+   *   시작 스크립트: 기본 폴더 아래면 상대 경로로 바꿔 넣는다.
+   *   로그 폴더: 그 폴더와 한 단계 아래의 모든 파일(폴더/*, 폴더/*\/*)을 패턴에 더한다.
+   *   INI 파일: 그 파일을 패턴에 더한다.
+   */
+  const pickPath = (path: string) => {
     if (!picker) return;
-    const base = picker.baseDir.replace(/\/+$/, '');
-    const value = base && path.startsWith(`${base}/`) ? path.slice(base.length + 1) : path;
-    updateRow('processes', picker.rowKey, 'startScript', value);
+    const { rowKey, field, baseDir } = picker;
+    if (field === 'startScript') {
+      updateRow('processes', rowKey, field, path.startsWith(`${baseDir}/`) ? path.slice(baseDir.length + 1) : path);
+    } else {
+      const current = patternList(rows.processes.find(r => r.key === rowKey)?.[field] ?? '') ?? [];
+      const added = field === 'logFiles' ? [`${path}/*`, `${path}/*/*`] : [path];
+      updateRow('processes', rowKey, field, [...current, ...added.filter(p => !current.includes(p))].join(', '));
+    }
     setPicker(null);
   };
 
@@ -385,15 +411,17 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
     if (!validation.ok) return;
     // 기본 폴더를 바꾸면 파일 이름만 적은 시작 스크립트의 실제 경로가 함께 바뀌므로 확인한다.
     const moved = validation.config.processes.flatMap(p => {
-      const before = savedServers.get(p.server)?.baseDir;
-      const after = validation.config.servers.find(s => s.id === p.server)?.baseDir;
-      const oldPath = scriptPath(p.startScript, before);
-      const newPath = scriptPath(p.startScript, after);
-      return savedServers.has(p.server) && before !== after && p.startScript && !p.startScript.startsWith('/') && oldPath !== newPath
+      const saved = savedServers.get(p.server);
+      const next = validation.config.servers.find(s => s.id === p.server);
+      if (!saved || !next) return [];
+      // 기본 폴더를 비워 두면 user 로 정해지므로 user 를 바꿔도 바뀐다.
+      const oldPath = scriptPath(p.startScript, baseDirOf(saved));
+      const newPath = scriptPath(p.startScript, baseDirOf(next));
+      return p.startScript && !p.startScript.startsWith('/') && oldPath !== newPath
         ? [`${p.label || p.id}: ${oldPath} → ${newPath}`]
         : [];
     });
-    if (moved.length > 0 && !window.confirm(`기본 폴더를 바꿔 다음 시작 스크립트 경로가 바뀝니다. 저장할까요?\n\n${moved.join('\n')}`)) return;
+    if (moved.length > 0 && !window.confirm(`기본 폴더(또는 user)를 바꿔 다음 시작 스크립트 경로가 바뀝니다. 저장할까요?\n\n${moved.join('\n')}`)) return;
     setSaving(true);
     setMessage(null);
     try {
@@ -502,12 +530,15 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                             const fieldClass = inputClass(`${section}.${i}.${field}`);
                             const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
                               updateRow(section, row.key, field, e.target.value);
-                            if (section === 'processes' && field === 'startScript') {
+                            if (section === 'processes' && (field === 'startScript' || field === 'logFiles' || field === 'iniFiles')) {
                               const serverRow = rows.servers.find(r => r.id.trim() === row.server);
-                              const baseDir = serverRow?.baseDir.trim() ?? '';
+                              const baseDir = serverRow ? baseDirOf({ baseDir: serverRow.baseDir.trim(), user: serverRow.user.trim() }) : '';
                               const problem = browseProblem(serverRow);
                               const value = row.startScript.trim();
-                              const resolved = value && !value.startsWith('/') && baseDir ? scriptPath(value, baseDir) : null;
+                              const script = scriptPath(value, baseDir);
+                              // 로그 · INI 는 시작 스크립트 폴더에서, 시작 스크립트는 기본 폴더에서 찾아보기를 시작한다.
+                              const startDir = field !== 'startScript' && script ? script.slice(0, script.lastIndexOf('/')) : baseDir;
+                              const resolved = field === 'startScript' && value && !value.startsWith('/') ? script : null;
                               return (
                                 <td key={field} className={className}>
                                   <div className="config-editor-picker">
@@ -516,10 +547,17 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                                       className="btn btn-secondary"
                                       onClick={() =>
                                         serverRow &&
-                                        setPicker({ rowKey: row.key, serverId: serverRow.id.trim(), serverLabel: serverRow.label.trim() || serverRow.id.trim(), baseDir })
+                                        setPicker({
+                                          rowKey: row.key,
+                                          field,
+                                          serverId: serverRow.id.trim(),
+                                          serverLabel: serverRow.label.trim() || serverRow.id.trim(),
+                                          baseDir,
+                                          startDir,
+                                        })
                                       }
                                       disabled={problem !== null}
-                                      title={problem ?? '서버에서 시작 스크립트를 고릅니다'}
+                                      title={problem ?? PICK_TEXT[field].help}
                                     >
                                       찾아보기
                                     </button>
@@ -551,6 +589,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
                                     placeholder={
                                       type === 'password' ? (keepsPassword(row) ? '저장됨 (바꿀 때만 입력)' : '입력 필요')
                                       : field === 'label' ? row.id
+                                      : field === 'baseDir' ? `${baseDirOf({ user: row.user.trim() })} (비우면)`
                                       : placeholder
                                     }
                                     value={row[field]}
@@ -587,9 +626,12 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onCl
           <RemoteFilePicker
             serverId={picker.serverId}
             serverLabel={picker.serverLabel}
-            startDir={picker.baseDir || undefined}
-            title="시작 스크립트 고르기"
-            onPick={pickStartScript}
+            startDir={picker.startDir || undefined}
+            title={PICK_TEXT[picker.field].title}
+            mode={picker.field === 'logFiles' ? 'dir' : 'file'}
+            fileFilter={picker.field === 'iniFiles' ? name => name.toLowerCase().endsWith('.ini') : undefined}
+            fileFilterText={picker.field === 'iniFiles' ? '.ini 파일' : undefined}
+            onPick={pickPath}
             onClose={() => setPicker(null)}
           />
         )}

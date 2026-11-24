@@ -12,6 +12,12 @@ interface RemoteFilePickerProps {
   /** 처음 열 폴더. 비었거나 열 수 없으면(홈 밖 등) 홈 폴더를 연다. */
   startDir?: string;
   title: string;
+  /** file: 파일 하나를 고른다. dir: 폴더 하나를 고른다. (고르지 않고 '선택' 하면 지금 폴더) */
+  mode?: 'file' | 'dir';
+  /** file 모드에서 고를 수 있는 파일 이름 (예: .ini 만). 나머지는 흐리게 보이고 고를 수 없다. */
+  fileFilter?: (name: string) => boolean;
+  /** 고를 수 있는 파일 설명 (예: '.ini 파일') */
+  fileFilterText?: string;
   onPick: (path: string) => void;
   onClose: () => void;
 }
@@ -22,10 +28,21 @@ const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 const parentPath = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
 
 /**
- * 서버의 파일 하나를 고르는 창. (SSH 계정의 홈 폴더 아래만, GET /api/servers/:id/browse)
- * 파일을 누르면 선택, 두 번 누르면 바로 고른다. 폴더는 두 번 누르거나 Enter 로 연다.
+ * 서버의 파일(또는 폴더) 하나를 고르는 창. (SSH 계정의 홈 폴더 아래만, GET /api/servers/:id/browse)
+ * 파일 모드: 파일을 누르면 선택, 두 번 누르면 바로 고른다. 폴더 모드: 폴더를 누르면 선택, 아무것도 고르지 않으면 지금 폴더.
+ * 폴더는 어느 모드든 두 번 누르거나 Enter 로 연다.
  */
-const RemoteFilePicker: React.FC<RemoteFilePickerProps> = ({ serverId, serverLabel, startDir, title, onPick, onClose }) => {
+const RemoteFilePicker: React.FC<RemoteFilePickerProps> = ({
+  serverId,
+  serverLabel,
+  startDir,
+  title,
+  mode = 'file',
+  fileFilter,
+  fileFilterText,
+  onPick,
+  onClose,
+}) => {
   const [dir, setDir] = useState<RemoteDir | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,12 +133,14 @@ const RemoteFilePicker: React.FC<RemoteFilePickerProps> = ({ serverId, serverLab
             {dir.entries.map(entry => {
               const isDir = entry.type === 'dir';
               const isFile = entry.type === 'file';
+              // 고를 수 있는 항목: 파일 모드는 (조건에 맞는) 파일, 폴더 모드는 폴더
+              const selectable = mode === 'dir' ? isDir : isFile && (!fileFilter || fileFilter(baseName(entry.path)));
               return (
                 <li key={entry.path}>
                   <button
                     className={`remote-file-picker-row${selected?.path === entry.path ? ' remote-file-picker-row-selected' : ''}`}
-                    onClick={() => isFile && setSelected(entry)}
-                    onDoubleClick={() => (isDir ? load(entry.path) : isFile ? onPick(entry.path) : undefined)}
+                    onClick={() => selectable && setSelected(entry)}
+                    onDoubleClick={() => (isDir ? load(entry.path) : selectable ? onPick(entry.path) : undefined)}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && isDir) {
                         e.preventDefault();
@@ -130,8 +149,8 @@ const RemoteFilePicker: React.FC<RemoteFilePickerProps> = ({ serverId, serverLab
                     }}
                     title={entry.path}
                   >
-                    <Icon name={isDir ? 'folder' : 'file'} className={isDir || isFile ? undefined : 'remote-file-picker-muted'} />
-                    <span className="remote-file-picker-name">{baseName(entry.path)}</span>
+                    <Icon name={isDir ? 'folder' : 'file'} className={isDir || selectable ? undefined : 'remote-file-picker-muted'} />
+                    <span className={`remote-file-picker-name${isDir || selectable ? '' : ' remote-file-picker-muted'}`}>{baseName(entry.path)}</span>
                     <span className="remote-file-picker-meta">{isFile ? `${formatSize(entry.size)} · ${entry.modified}` : entry.modified}</span>
                   </button>
                 </li>
@@ -141,11 +160,21 @@ const RemoteFilePicker: React.FC<RemoteFilePickerProps> = ({ serverId, serverLab
         ) : null}
 
         <footer className="remote-file-picker-footer">
-          <code className="remote-file-picker-selected">{selected ? selected.path : '파일을 고르세요 (폴더는 두 번 눌러 엽니다)'}</code>
+          <code className="remote-file-picker-selected">
+            {selected
+              ? selected.path
+              : mode === 'dir'
+                ? `${dir?.path ?? ''} (지금 폴더. 폴더는 두 번 눌러 엽니다)`
+                : `${fileFilterText ?? '파일'}을 고르세요 (폴더는 두 번 눌러 엽니다)`}
+          </code>
           <button className="btn btn-secondary" onClick={onClose}>
             취소
           </button>
-          <button className="btn btn-primary" onClick={() => selected && onPick(selected.path)} disabled={!selected}>
+          <button
+            className="btn btn-primary"
+            onClick={() => (selected ? onPick(selected.path) : mode === 'dir' && dir ? onPick(dir.path) : undefined)}
+            disabled={!selected && !(mode === 'dir' && dir)}
+          >
             선택
           </button>
         </footer>

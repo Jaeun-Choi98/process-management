@@ -56,6 +56,7 @@ func (ctl *Controller) RoutePath(router *gin.Engine) {
 	api.GET("/servers/:id/browse", handleBrowse(monitor))
 	api.GET("/servers/:id/ps", handleRunningProcesses(monitor))
 	api.POST("/servers/:id/update", requireTar, handleUpdate(monitor))
+	api.POST("/servers/:id/install", requireTar, handleInstall(monitor))
 }
 
 // handleLogConfig 는 현재 로그 레벨을 돌려준다. 쿼리를 주면 레벨을 바꾼 뒤 돌려준다.
@@ -356,5 +357,26 @@ func handleRunningProcesses(monitor *processes.Monitor) gin.HandlerFunc {
 		}
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, gin.H{"processes": rows})
+	}
+}
+
+// POST /api/servers/:id/install?path=/home/ops/app&start=bin/start.sh&label=앱 ( 본문: tar ) : 새 폴더에 프로그램을 설치하고 프로세스로 등록한다.
+// 대상이 이미 있으면 설치하지 않는다. *.sh 와 시작 파일에 실행 권한을 준다. ( 누가 했는지 로그에 남긴다 )
+func handleInstall(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		req := processes.InstallRequest{Target: c.Query("path"), StartFile: c.Query("start"), Label: c.Query("label")}
+		logger.Warnf("[REST] program install requested: %s %s (start %s, %d bytes), remote: %s", id, req.Target, req.StartFile, c.Request.ContentLength, c.ClientIP())
+
+		result, err := monitor.InstallRemote(c.Request.Context(), id, req, c.Request.Body, c.Request.ContentLength)
+		if err != nil {
+			logger.Warnf("[REST] program install failed: %s %s, err: %v", id, req.Target, err)
+			// 다 받기 전에 실패해도 응답이 브라우저에 닿도록 남은 본문을 마저 읽는다.
+			io.Copy(io.Discard, c.Request.Body)
+			respondError(c, err)
+			return
+		}
+		logger.Warnf("[REST] program installed: %s %s -> process %s (%d files, %d bytes)", id, result.Path, result.ProcessID, result.Files, result.Bytes)
+		c.JSON(http.StatusOK, result)
 	}
 }

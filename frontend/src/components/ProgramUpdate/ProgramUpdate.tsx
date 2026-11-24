@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import { ProcessEntry, RemoteDir, RemoteEntry, ServerEntry, UpdateResult } from '../../types/config';
 import { requestApi, uploadApi } from '../../api/client';
-import { buildTar, TarEntry } from '../../utils/tar';
+import { buildTar } from '../../utils/tar';
+import { buildLocalTree, describeLocal, Kind, LocalNode, tarEntries } from '../../utils/localFiles';
 import { formatDateTime, formatSize } from '../../utils/format';
-import { hasCondition, scriptPath } from '../../utils/schema';
+import { baseDirOf, hasCondition, scriptPath } from '../../utils/schema';
 import './ProgramUpdate.css';
 
 interface ProgramUpdateProps {
@@ -27,75 +28,18 @@ const restartProblem = (p: ProcessEntry) =>
  * 업데이트 대상과 관련 있어 보이는 프로세스: 시작 스크립트가 바꾸는 폴더 안에 있거나(폴더),
  * 바꾸는 파일과 같은 폴더에 있는(파일) 프로세스. 경로는 글자로만 비교하므로 처음 체크 상태로만 쓴다.
  */
-const isRelated = (p: ProcessEntry, baseDir: string | undefined, target: string, kind: Kind) => {
+const isRelated = (p: ProcessEntry, baseDir: string, target: string, kind: Kind) => {
   const script = scriptPath(p.startScript, baseDir) ?? '';
   return kind === 'dir' ? script.startsWith(`${target}/`) : script.startsWith(`${target.slice(0, target.lastIndexOf('/'))}/`);
 };
 
 type RestartResult = { name: string; ok: boolean; text: string };
 
-type Kind = 'dir' | 'file';
 const KIND_TEXT: Record<Kind, string> = { dir: '폴더', file: '파일' };
-
-/** 내 PC 에서 고른 폴더 · 파일의 한 항목. 폴더는 아래 항목의 파일 수 · 크기 합을 가진다. */
-interface LocalNode {
-  name: string;
-  kind: Kind;
-  file?: File;
-  children: LocalNode[];
-  files: number;
-  bytes: number;
-}
-
-const newDir = (name: string): LocalNode => ({ name, kind: 'dir', children: [], files: 0, bytes: 0 });
-
-/**
- * 고른 파일 목록으로 트리를 만든다. 반환값은 고른 폴더(또는 파일) 하나를 담은 가상의 뿌리다.
- * 폴더를 고르면 각 파일의 webkitRelativePath 가 "고른폴더/sub/a.txt" 이다. (빈 폴더는 브라우저가 알려주지 않는다)
- */
-const buildLocalTree = (files: File[], folderName?: string): LocalNode => {
-  const root = newDir('');
-  if (folderName !== undefined) root.children.push(newDir(folderName));
-  const index = new Map<string, LocalNode>([['', root]]);
-  for (const file of files) {
-    const parts = (file.webkitRelativePath || file.name).split('/');
-    let node = root;
-    let key = '';
-    parts.forEach((part, i) => {
-      node.files += 1;
-      node.bytes += file.size;
-      key += `/${part}`;
-      let child = index.get(key);
-      if (!child) {
-        child = i === parts.length - 1 ? { name: part, kind: 'file', file, children: [], files: 0, bytes: file.size } : newDir(part);
-        // 폴더를 골랐는데 파일이 없으면 위에서 미리 넣은 빈 폴더를 쓴다.
-        const existing = i === 0 ? node.children.find(c => c.name === part && c.kind === child!.kind) : undefined;
-        if (existing) child = existing;
-        else node.children.push(child);
-        index.set(key, child);
-      }
-      node = child;
-    });
-  }
-  const sort = (node: LocalNode) => {
-    node.children.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1));
-    node.children.forEach(sort);
-  };
-  sort(root);
-  return root;
-};
-
-/** 서버 쪽 대상 이름(name) 아래로 tar 항목을 만든다. (내 PC 의 이름과 달라도 서버 이름을 그대로 쓴다) */
-const tarEntries = (node: LocalNode, name: string): TarEntry[] =>
-  node.kind === 'file'
-    ? [{ path: name, file: node.file, modified: node.file?.lastModified }]
-    : [{ path: name }, ...node.children.flatMap(child => tarEntries(child, `${name}/${child.name}`))];
 
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 const parentPath = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
 const remoteKind = (entry: RemoteEntry): Kind | null => (entry.type === 'dir' || entry.type === 'file' ? entry.type : null);
-const describeLocal = (node: LocalNode) =>
-  node.kind === 'dir' ? `파일 ${node.files.toLocaleString()}개, ${formatSize(node.bytes)}` : formatSize(node.bytes);
 
 /**
  * 프로그램 업데이트: 왼쪽은 서버(SSH 계정의 홈 아래), 오른쪽은 내 PC 에서 고른 폴더 · 파일.
@@ -145,19 +89,15 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
     [base]
   );
 
-  // 서버 기본 폴더에서 시작한다. 없거나 열 수 없으면(홈 밖 등) 홈 폴더.
-  const baseDir = server.baseDir;
+  // 서버 기본 폴더(비워 두면 /home/<user>)에서 시작한다. 열 수 없으면(없음 · 홈 밖) 실제 홈 폴더.
+  const baseDir = baseDirOf(server);
   useEffect(() => {
     const open = async () => {
-      if (baseDir) {
-        try {
-          setRemote(await requestApi<RemoteDir>(`${base}/browse?${new URLSearchParams({ path: baseDir })}`));
-          return;
-        } catch {
-          // 홈 폴더로 연다.
-        }
+      try {
+        setRemote(await requestApi<RemoteDir>(`${base}/browse?${new URLSearchParams({ path: baseDir })}`));
+      } catch {
+        await loadRemote('');
       }
-      await loadRemote('');
     };
     void open();
   }, [base, baseDir, loadRemote]);
@@ -190,8 +130,8 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
   const remoteSelectedType = remoteSelected ? remoteKind(remoteSelected) : null;
   useEffect(() => {
     if (!remoteSelectedPath || !remoteSelectedType) return;
-    setRestartIds(new Set(processes.filter(p => !restartProblem(p) && isRelated(p, server.baseDir, remoteSelectedPath, remoteSelectedType)).map(p => p.id)));
-  }, [remoteSelectedPath, remoteSelectedType, processes, server.baseDir]);
+    setRestartIds(new Set(processes.filter(p => !restartProblem(p) && isRelated(p, baseDir, remoteSelectedPath, remoteSelectedType)).map(p => p.id)));
+  }, [remoteSelectedPath, remoteSelectedType, processes, baseDir]);
 
   const toggleRestart = (id: string, checked: boolean) =>
     setRestartIds(prev => {
@@ -430,7 +370,7 @@ const ProgramUpdate: React.FC<ProgramUpdateProps> = ({ server, processes, onRest
                 {processes.map(p => {
                   const problem = restartProblem(p);
                   return (
-                    <label key={p.id} title={problem ?? scriptPath(p.startScript, server.baseDir)}>
+                    <label key={p.id} title={problem ?? scriptPath(p.startScript, baseDir)}>
                       <input type="checkbox" checked={!problem && restartIds.has(p.id)} disabled={problem !== null} onChange={e => toggleRestart(p.id, e.target.checked)} />
                       {p.label || p.id}
                       {problem && <em> ({problem})</em>}

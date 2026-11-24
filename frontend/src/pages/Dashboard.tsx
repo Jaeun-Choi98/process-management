@@ -6,10 +6,11 @@ import LogViewer, { FileRoot } from '../components/LogViewer/LogViewer';
 import WatchEditor from '../components/WatchEditor/WatchEditor';
 import MarkdownPanel from '../components/MarkdownPanel/MarkdownPanel';
 import ProgramUpdate from '../components/ProgramUpdate/ProgramUpdate';
+import ProgramInstall from '../components/ProgramInstall/ProgramInstall';
 import ServerCard from '../components/ServerCard/ServerCard';
 import StatusSidebar, { ServerView } from '../components/StatusSidebar/StatusSidebar';
 import { DEFAULT_POLL_INTERVAL_MS, hasCondition } from '../utils/schema';
-import { GroupEntry, ProcessEntry, ServerEntry, ServerStatus } from '../types/config';
+import { GroupEntry, ProcessConfig, ProcessEntry, ServerEntry, ServerStatus } from '../types/config';
 import { useGroupStatus } from '../hooks/useGroupStatus';
 import { useProcessConfig } from '../hooks/useProcessConfig';
 import './Dashboard.css';
@@ -36,6 +37,8 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   } | null>(null);
   /** 열려 있는 프로그램 업데이트 창의 서버 */
   const [updateTarget, setUpdateTarget] = useState<ServerEntry | null>(null);
+  /** 열려 있는 프로그램 설치 창의 서버 */
+  const [installTarget, setInstallTarget] = useState<ServerEntry | null>(null);
   /** 검색에 가려진 카드를 골랐을 때, 검색을 지우고 다시 그려진 뒤 스크롤할 대상 */
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
@@ -84,6 +87,15 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   const closeFiles = useCallback(() => setFileTarget(null), []);
   const closeWatch = useCallback(() => setWatchTarget(null), []);
   const closeUpdate = useCallback(() => setUpdateTarget(null), []);
+  const closeInstall = useCallback(() => setInstallTarget(null), []);
+  /** 화면 밖(설치 · 자동 조건)에서 설정이 바뀌면 서버가 돌려준 설정으로 바꾸고 상태를 다시 읽는다. */
+  const applyConfig = useCallback(
+    (next: ProcessConfig) => {
+      apply(next);
+      status.refresh();
+    },
+    [apply, status]
+  );
   // 상태 새로고침마다 새 배열이 되면 업데이트 창의 재시작 체크가 초기화되므로 설정이 바뀔 때만 다시 만든다.
   const updateProcesses = useMemo(
     () => (updateTarget ? (config?.processes ?? []).filter(p => p.server === updateTarget.id) : []),
@@ -207,6 +219,8 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                         onEditWatch={(process, processStatus) => setWatchTarget({ process, serverLabel: server.label || server.id, status: processStatus })}
                         onActionDone={status.refresh}
                         onUpdateProgram={() => setUpdateTarget(server)}
+                        onInstallProgram={() => setInstallTarget(server)}
+                        onConfigSaved={applyConfig}
                       />
                     );
                   })}
@@ -231,6 +245,17 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
             status.refresh();
           }}
           onClose={closeWatch}
+        />
+      )}
+      {installTarget && (
+        <ProgramInstall
+          server={installTarget}
+          onInstalled={() => {
+            void refresh().catch(() => undefined);
+            status.refresh();
+          }}
+          onConfigSaved={applyConfig}
+          onClose={closeInstall}
         />
       )}
       {updateTarget && (

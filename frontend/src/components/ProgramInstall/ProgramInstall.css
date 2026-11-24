@@ -1,0 +1,178 @@
+.program-install-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--overlay);
+}
+
+.program-install {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.program-install-header,
+.program-install-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.program-install-header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.program-install-header div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.program-install-header span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.program-install-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px;
+  overflow: auto;
+  font-size: 0.8rem;
+}
+
+.program-install-body section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.program-install-body h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.program-install-body small { color: var(--text-muted); }
+
+.program-install-body code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.program-install-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.program-install-name {
+  flex: 1;
+  min-width: 140px;
+  font-family: var(--font-mono);
+}
+
+.program-install-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.program-install-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.program-install-steps {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.program-install-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+}
+
+.program-install-progress progress {
+  flex: 1;
+  min-width: 160px;
+  max-width: 360px;
+  height: 6px;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.program-install-progress progress::-webkit-progress-bar { background: var(--surface-2); }
+.program-install-progress progress::-webkit-progress-value { background: var(--accent); }
+.program-install-progress progress::-moz-progress-bar { background: var(--accent); }
+
+.program-install-step {
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  border-radius: var(--radius);
+}
+
+.program-install-step-info { color: var(--text-muted); background: var(--surface-2); }
+.program-install-step-ok { color: var(--success); background: var(--success-bg); }
+.program-install-step-error { color: var(--error); background: var(--error-bg); }
+
+.program-install-candidates {
+  max-height: 180px;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.program-install-candidates button {
+  display: block;
+  width: 100%;
+  padding: 3px 10px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.program-install-candidates button:hover:not(:disabled) { background: var(--surface-2); }
+
+.program-install-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+}
+
+.program-install-problem {
+  margin-right: auto;
+  font-size: 0.78rem;
+  color: var(--warning);
+}

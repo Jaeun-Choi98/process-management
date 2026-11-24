@@ -1,4 +1,4 @@
-import { checkFilePattern, conditionFromCommand, effectivePatterns, migrateLegacyMatch, scriptPath, validateProcessConfig } from './schema';
+import { baseDirOf, checkFilePattern, conditionFromCommand, effectivePatterns, migrateLegacyMatch, scriptPath, validateProcessConfig } from './schema';
 
 const valid = {
   pollIntervalMs: 5000,
@@ -146,7 +146,27 @@ test('시작 스크립트는 파일 이름만 적으면 서버 기본 폴더 기
     const result = validateProcessConfig(c);
     return result.ok ? [] : result.errors;
   };
-  expect(errors(config(undefined, 'start.sh')).join()).toContain('기본 폴더가 필요합니다');
+  // 기본 폴더를 비워 두면 /home/<user>, root 는 /root
+  expect(validateProcessConfig(config(undefined, 'start.sh')).ok).toBe(true);
+  expect(baseDirOf({ user: 'test' })).toBe('/home/test');
+  expect(baseDirOf({ user: 'root' })).toBe('/root');
+  expect(baseDirOf({ user: 'test', baseDir: '/opt/app' })).toBe('/opt/app');
   expect(errors(config('/home/ops/app', '../start.sh')).join()).toContain('startScript');
   expect(errors(config('home/ops', '/opt/a/start.sh')).join()).toContain('baseDir');
+});
+
+test('로그는 시작 스크립트 폴더의 한 단계 위부터 찾는다', () => {
+  const logs = effectivePatterns({ startScript: '/home/ops/app/bin/start.sh' }, 'log').patterns;
+  expect(logs).toHaveLength(6);
+  expect(logs[0]).toBe('/home/ops/app/*.log');
+  expect(logs[5]).toBe('/home/ops/app/*/*/*/*/*/*.log');
+  expect(effectivePatterns({ startScript: '/home/ops/app/bin/start.sh' }, 'ini').patterns[0]).toBe('/home/ops/app/bin/*.ini');
+  // 위 폴더(/home)가 너무 얕으면 시작 스크립트 폴더부터 5단계
+  expect(effectivePatterns({ startScript: '/home/ops/start.sh' }, 'log').patterns).toEqual([
+    '/home/ops/*.log',
+    '/home/ops/*/*.log',
+    '/home/ops/*/*/*.log',
+    '/home/ops/*/*/*/*.log',
+    '/home/ops/*/*/*/*/*.log',
+  ]);
 });

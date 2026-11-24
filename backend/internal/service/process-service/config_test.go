@@ -390,7 +390,7 @@ func TestRelativeStartScript(t *testing.T) {
 		{"/home/ops/app", "start.sh", ""},
 		{"/home/ops/app", "bin/start.sh", ""},
 		{"/home/ops/app", "/opt/other/start.sh", ""},
-		{"", "start.sh", "기본 폴더가 필요합니다"},
+		{"", "start.sh", ""}, // 비워 두면 /home/ops
 		{"/home/ops/app", "../start.sh", "startScript"},
 		{"/home/ops/app", "bin/../../x.sh", "startScript"},
 		{"/home/ops/app", "start.sh; rm", "startScript"},
@@ -402,6 +402,18 @@ func TestRelativeStartScript(t *testing.T) {
 		if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 			t.Errorf("baseDir %q script %q: %v, want %q", tc.baseDir, tc.script, err, tc.wantErr)
 		}
+	}
+
+	// 기본 폴더를 비워 두면 /home/<user>, root 는 /root. user 가 경로로 쓸 수 없으면 상대 경로를 쓸 수 없다.
+	for user, want := range map[string]string{"ops": "/home/ops/start.sh", "root": "/root/start.sh"} {
+		if got := (Server{User: user}).scriptPath("start.sh"); got != want {
+			t.Errorf("default scriptPath(%s) = %q", user, got)
+		}
+	}
+	odd := config("", "start.sh")
+	odd.Servers[0].User = "a b"
+	if err := odd.Validate(); err == nil || !strings.Contains(err.Error(), "기본 폴더") {
+		t.Errorf("odd user: %v", err)
 	}
 
 	// 기본 폴더 기준으로 바꾼 경로를 시작 · 로그 패턴에 쓴다.
@@ -442,5 +454,22 @@ func TestIsUserProcess(t *testing.T) {
 		if got := isUserProcess(row); got != want {
 			t.Errorf("%+v = %v", row, got)
 		}
+	}
+}
+
+func TestDefaultLogPatternsIncludeParent(t *testing.T) {
+	// 로그는 시작 스크립트 폴더의 한 단계 위(/home/ops/app)부터 6단계. INI 는 그대로 시작 스크립트 폴더부터 3단계.
+	p := Process{StartScript: "/home/ops/app/bin/start.sh"}
+	logs, problem := p.EffectivePatterns(RootLog)
+	if problem != "" || len(logs) != 6 || logs[0] != "/home/ops/app/*.log" || logs[5] != "/home/ops/app/*/*/*/*/*/*.log" {
+		t.Errorf("logs = %v, %q", logs, problem)
+	}
+	if inis, _ := p.EffectivePatterns(RootINI); len(inis) != 3 || inis[0] != "/home/ops/app/bin/*.ini" {
+		t.Errorf("inis = %v", inis)
+	}
+	// 위 폴더가 너무 얕으면(/home) 시작 스크립트 폴더부터 5단계
+	shallow := Process{StartScript: "/home/ops/start.sh"}
+	if logs, _ := shallow.EffectivePatterns(RootLog); len(logs) != 5 || logs[0] != "/home/ops/*.log" {
+		t.Errorf("shallow logs = %v", logs)
 	}
 }

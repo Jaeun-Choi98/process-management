@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import Icon from '../Icon/Icon';
-import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../types/config';
+import { ProcessConfig, ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../types/config';
 import { ServerState } from '../StatusSidebar/StatusSidebar';
 import { FileRoot } from '../LogViewer/LogViewer';
 import { requestApi } from '../../api/client';
-import { describeCondition, effectivePatterns, hasCondition, scriptPath } from '../../utils/schema';
+import { detectStarted, fetchRunning, saveConditionFrom, startProcess } from '../../api/startDetect';
+import { baseDirOf, describeCondition, effectivePatterns, hasCondition, scriptPath } from '../../utils/schema';
 import './ServerCard.css';
 
 type ProcessStatus = ServerStatus['processes'][number];
@@ -25,6 +26,10 @@ interface ServerCardProps {
   onActionDone: () => void;
   /** 프로그램 업데이트 창을 연다. */
   onUpdateProgram: () => void;
+  /** 프로그램 설치 창을 연다. */
+  onInstallProgram: () => void;
+  /** 실행 판단 조건을 자동으로 정해 저장하면 서버가 돌려준 전체 설정으로 호출한다. */
+  onConfigSaved: (config: ProcessConfig) => void;
 }
 
 /** 아래에서 process 를 프로세스 항목 이름으로 쓰므로 환경 변수는 여기서 읽어 둔다. */
@@ -50,7 +55,7 @@ const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined,
 };
 
 /** 서버 하나의 SSH 접속 상태와, 그 서버에서 확인한 프로세스별 실행 상태 · 로그 · 시작/중지 버튼 */
-const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onOpenFiles, onEditWatch, onActionDone, onUpdateProgram }) => {
+const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onOpenFiles, onEditWatch, onActionDone, onUpdateProgram, onInstallProgram, onConfigSaved }) => {
   /** 프로세스 id → 진행 중인 동작 */
   const [busy, setBusy] = useState<Record<string, Action>>({});
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
@@ -76,6 +81,47 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
     }
   };
 
+  /**
+   * 실행 판단 조건이 없는 프로세스의 첫 시작: 시작 전후 ps 를 비교해 새로 뜬 프로세스로 조건을 정한다.
+   * 하나로 좁히지 못하면 [조건] 에서 고르도록 안내한다.
+   */
+  const startAndDetect = async (process: ProcessEntry) => {
+    const name = process.label || process.id;
+    if (
+      !window.confirm(
+        `${name} 은(는) 실행 판단 조건이 없어 이미 실행 중인지 알 수 없습니다.\n` +
+          '시작한 뒤 새로 뜬 프로세스로 조건을 자동으로 정합니다. 시작할까요?'
+      )
+    ) {
+      return;
+    }
+    setBusy(prev => ({ ...prev, [process.id]: 'start' }));
+    setMessage(null);
+    try {
+      const before = await fetchRunning(server.id);
+      await startProcess(process.id);
+      const folder = (process.startScript ?? '').slice(0, (process.startScript ?? '').lastIndexOf('/'));
+      const { picked, candidates } = await detectStarted(server.id, before, folder);
+      if (picked) {
+        onConfigSaved(await saveConditionFrom(process.id, picked, false));
+        setMessage({ kind: 'info', text: `${name}: 시작했고, 실행 판단 조건을 정했습니다 (${picked.command})` });
+      } else {
+        setMessage({
+          kind: 'error',
+          text:
+            candidates.length > 0
+              ? `${name}: 시작했지만 새로 뜬 프로세스가 여러 개입니다. [조건] 의 '실행 중인 프로세스에서 고르기' 로 정하세요.`
+              : `${name}: 시작했지만 새로 뜬 프로세스를 찾지 못했습니다. 로그를 확인하세요.`,
+        });
+      }
+    } catch (e) {
+      setMessage({ kind: 'error', text: `${name} 시작 실패: ${e instanceof Error ? e.message : String(e)}` });
+    } finally {
+      setBusy(({ [process.id]: _, ...rest }) => rest);
+      onActionDone();
+    }
+  };
+
   // 실행 판단 조건이 없는 프로세스는 상태를 확인하지 않으므로 세지 않는다.
   const checked = processes.filter(hasCondition);
   const runningCount = checked.filter(p => status?.processes.find(s => s.id === p.id)?.instances.length).length;
@@ -92,6 +138,9 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
         <span className="server-card-summary">
           {status && !status.error && `실행 ${runningCount}/${checked.length}`}
         </span>
+        <button className="btn-text" onClick={onInstallProgram} title="내 PC 의 프로그램 폴더를 이 서버에 새로 설치하고 프로세스로 등록합니다">
+          프로그램 설치
+        </button>
         <button className="btn-text" onClick={onUpdateProgram} title="서버의 폴더 · 파일을 내 PC 의 것으로 바꿉니다">
           프로그램 업데이트
         </button>
@@ -119,7 +168,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
             <tbody>
               {processes.map(listed => {
                 // 시작 스크립트를 파일 이름만 적었으면 서버 기본 폴더 기준 전체 경로로 바꿔 쓴다. (로그 · INI 기본 폴더도 이 기준)
-                const process = { ...listed, startScript: scriptPath(listed.startScript, server.baseDir) };
+                const process = { ...listed, startScript: scriptPath(listed.startScript, baseDirOf(server)) };
                 const processStatus = status?.processes.find(s => s.id === process.id);
                 const instances = processStatus?.instances ?? [];
                 const running = instances.length > 0;
@@ -190,6 +239,15 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                             >
                               조건
                             </button>
+                            {!configured && status && !status.error && process.startScript && (
+                              <button
+                                className="btn-text btn-text-ok"
+                                onClick={() => startAndDetect(process)}
+                                title={`${process.startScript}\n처음 시작하면 새로 뜬 프로세스로 실행 판단 조건을 자동으로 정합니다`}
+                              >
+                                시작
+                              </button>
+                            )}
                             {known && !running && (
                               <button className="btn-text btn-text-ok" onClick={() => runAction(process, 'start')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>
                                 시작

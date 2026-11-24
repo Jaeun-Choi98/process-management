@@ -14,12 +14,15 @@ const DEFAULT_PATTERN_DEPTH = { log: 5, ini: 3 };
 
 const dirname = (file: string) => file.slice(0, file.lastIndexOf('/')) || '/';
 
+/** 서버의 기본 폴더. 비워 두면 /home/<user> (root 는 /root). (Go 서버의 Server.baseDir) */
+export const baseDirOf = (server: { baseDir?: string; user?: string }): string =>
+  server.baseDir || (server.user === 'root' ? '/root' : `/home/${server.user ?? ''}`);
+
 /**
- * 시작 스크립트의 절대 경로. '/' 로 시작하지 않으면 서버 기본 폴더 기준 상대 경로다. (Go 서버의 Server.scriptPath)
- * 기본 폴더가 없으면 적은 그대로 돌려준다. (저장할 때 막힌다)
+ * 시작 스크립트의 절대 경로. '/' 로 시작하지 않으면 서버 기본 폴더(baseDirOf) 기준 상대 경로다. (Go 서버의 Server.scriptPath)
  */
-export const scriptPath = (startScript: string | undefined, baseDir: string | undefined): string | undefined =>
-  !startScript || startScript.startsWith('/') || !baseDir ? startScript : `${baseDir}/${startScript}`;
+export const scriptPath = (startScript: string | undefined, baseDir: string): string | undefined =>
+  !startScript || startScript.startsWith('/') ? startScript : `${baseDir}/${startScript}`;
 
 /** 시작 스크립트를 상대 경로로 적어도 되는 모양인지 (start.sh, bin/start.sh. '..' · '//' 금지) */
 const isSafeRelativePath = (value: string) =>
@@ -52,7 +55,13 @@ export function effectivePatterns(
       return { patterns: [], problem: `시작 스크립트가 등록되지 않아 ${ext} 파일을 찾을 폴더가 없습니다 (설정에서 시작 스크립트나 패턴을 적어 주세요)` };
     }
     const base = dirname(process.startScript);
-    const patterns = Array.from({ length: DEFAULT_PATTERN_DEPTH[root] }, (_, depth) => `${base}/${'*/'.repeat(depth)}*${ext}`);
+    const build = (dir: string, depth: number) => Array.from({ length: depth }, (_, i) => `${dir}/${'*/'.repeat(i)}*${ext}`);
+    // 로그는 한 단계 위 폴더부터 (bin/start.sh 옆의 logs/). 위 폴더가 너무 얕으면 시작 스크립트 폴더부터. (Go 서버와 같은 규칙)
+    if (root === 'log') {
+      const parent = build(dirname(base), DEFAULT_PATTERN_DEPTH.log + 1);
+      if (!checkFilePattern(parent[0], false)) return { patterns: parent };
+    }
+    const patterns = build(base, DEFAULT_PATTERN_DEPTH[root]);
     if (checkFilePattern(patterns[0], root === 'ini')) {
       return { patterns: [], problem: `시작 스크립트 폴더(${base})가 너무 얕아 자동으로 찾지 않습니다 (설정에서 패턴을 적어 주세요)` };
     }
@@ -184,8 +193,8 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
   });
 
   const serverIds = new Set<string>();
-  /** 서버 id → 기본 폴더 (시작 스크립트 상대 경로 확인용) */
-  const baseDirs = new Map<string, string | undefined>();
+  /** 서버 id → 기본 폴더 (시작 스크립트 상대 경로 확인용, 비워 두면 /home/<user>) */
+  const baseDirs = new Map<string, string>();
   servers.forEach((server: unknown, i: number) => {
     const at = `servers[${i}]`;
     if (!isObject(server)) return errors.push(`${at}: 객체여야 합니다`);
@@ -203,7 +212,10 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     if (server.baseDir !== undefined && !isSafePath(server.baseDir)) {
       errors.push(`${at}.baseDir: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
     }
-    baseDirs.set(String(server.id), typeof server.baseDir === 'string' ? server.baseDir : undefined);
+    baseDirs.set(
+      String(server.id),
+      baseDirOf({ baseDir: typeof server.baseDir === 'string' ? server.baseDir : undefined, user: typeof server.user === 'string' ? server.user : undefined })
+    );
   });
 
   const processIds = new Set<string>();
@@ -232,13 +244,13 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
 
     // '/' 로 시작하지 않으면 서버 기본 폴더 기준 상대 경로 (Go 서버와 같은 규칙)
-    const baseDir = baseDirs.get(String(process.server));
+    const baseDir = baseDirs.get(String(process.server)) ?? '';
     const rawScript = process.startScript;
     if (rawScript !== undefined) {
       if (typeof rawScript !== 'string' || (rawScript.startsWith('/') ? !isSafePath(rawScript) : !isSafeRelativePath(rawScript))) {
         errors.push(`${at}.startScript: 영문 · 숫자 · . _ - / 로 된 경로가 필요합니다 (기본 폴더 밖 '..' 은 안 됩니다)`);
-      } else if (!rawScript.startsWith('/') && !baseDir) {
-        errors.push(`${at}.startScript: 파일 이름만 적으려면 서버에 기본 폴더가 필요합니다 (또는 / 로 시작하는 전체 경로)`);
+      } else if (!rawScript.startsWith('/') && !isSafePath(scriptPath(rawScript, baseDir))) {
+        errors.push(`${at}.startScript: 기본 폴더(${baseDir}) 기준 경로가 올바르지 않습니다. 서버의 기본 폴더를 적어 주세요 (또는 / 로 시작하는 전체 경로)`);
       }
     }
     for (const field of ['logFiles', 'iniFiles'] as const) {

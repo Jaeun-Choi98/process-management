@@ -52,7 +52,7 @@ type Server struct {
 	// 조회 전용. 비밀번호가 저장되어 있으면 true. (저장 요청에 들어와도 무시한다)
 	HasPassword bool `json:"hasPassword,omitempty"`
 	// 기본 폴더 (예: /home/ops/app). 프로세스의 시작 스크립트를 상대 경로(start.sh, bin/start.sh)로 적으면 이 폴더 기준이다.
-	// 프로그램 업데이트 창 · 시작 스크립트 찾아보기도 이 폴더에서 시작한다. (홈 폴더 아래일 때)
+	// 프로그램 업데이트 창 · 찾아보기도 이 폴더에서 시작한다. (홈 폴더 아래일 때) 비워 두면 /home/<user> (root 는 /root)
 	BaseDir string `json:"baseDir,omitempty"`
 }
 
@@ -84,12 +84,25 @@ type Process struct {
 	AutoRestart bool `json:"autoRestart,omitempty"`
 }
 
+// baseDir 은 실제로 쓰는 기본 폴더다. 비워 두었으면 SSH 계정의 일반적인 홈 폴더(/home/<user>, root 는 /root)다.
+// (실제 홈이 다르면 설정에서 적어야 한다. user 에 경로로 쓸 수 없는 글자가 있으면 Validate 에서 걸린다)
+func (s Server) baseDir() string {
+	switch {
+	case s.BaseDir != "":
+		return s.BaseDir
+	case s.User == "root":
+		return "/root"
+	default:
+		return "/home/" + s.User
+	}
+}
+
 // scriptPath 는 시작 스크립트의 절대 경로다. 상대 경로면 기본 폴더 기준으로 바꾼다. (Validate 를 통과한 설정 기준)
 func (s Server) scriptPath(script string) string {
-	if script == "" || strings.HasPrefix(script, "/") || s.BaseDir == "" {
+	if script == "" || strings.HasPrefix(script, "/") {
 		return script
 	}
-	return s.BaseDir + "/" + script
+	return s.baseDir() + "/" + script
 }
 
 func (s Server) addr() string {
@@ -219,8 +232,8 @@ func (c *Config) Validate() error {
 		case !relativePathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript ||
 			p.StartScript == ".." || strings.HasPrefix(p.StartScript, "../"):
 			add("%s.startScript: 영문 · 숫자 · . _ - / 로 된 경로가 필요합니다 (기본 폴더 밖 '..' 은 안 됩니다)", at)
-		case servers[p.Server].BaseDir == "":
-			add("%s.startScript: 파일 이름만 적으려면 서버에 기본 폴더가 필요합니다 (또는 / 로 시작하는 전체 경로)", at)
+		case !pathPattern.MatchString(script) || path.Clean(script) != script:
+			add("%s.startScript: 기본 폴더(%s) 기준 경로가 올바르지 않습니다. 서버의 기본 폴더를 적어 주세요 (또는 / 로 시작하는 전체 경로)", at, servers[p.Server].baseDir())
 		}
 		for field, patterns := range map[string][]string{"logFiles": p.LogFiles, "iniFiles": p.IniFiles} {
 			if len(patterns) > maxFilePatterns {
@@ -314,6 +327,8 @@ func checkFilePattern(pattern string, ini bool) string {
 
 // 패턴을 비워 두었을 때 시작 스크립트 폴더 아래에서 찾는 깊이 (폴더 바로 아래 포함)
 // 로그는 날짜 · 종류별 폴더가 겹쳐 있는 경우가 많아 더 깊이 찾는다. (logs/2026/11/19/app.log)
+// 로그는 시작 스크립트가 bin/ 등에 있고 로그는 옆 폴더(../logs)에 쌓이는 경우가 많아, 한 단계 위 폴더부터 찾는다.
+// (위 폴더가 /home 처럼 너무 얕으면 시작 스크립트 폴더부터)
 var defaultPatternDepth = map[string]int{RootLog: 5, RootINI: 3}
 
 // EffectivePatterns 는 실제로 쓰는 로그 · INI 파일 패턴(절대 경로)이다.
@@ -332,10 +347,20 @@ func (p Process) EffectivePatterns(root string) ([]string, string) {
 			return nil, "시작 스크립트가 등록되지 않아 " + ext + " 파일을 찾을 폴더가 없습니다 (설정에서 시작 스크립트나 패턴을 적어 주세요)"
 		}
 		base := path.Dir(p.StartScript)
-		var patterns []string
-		for depth, wildcards := 0, ""; depth < defaultPatternDepth[root]; depth, wildcards = depth+1, wildcards+"*/" {
-			patterns = append(patterns, base+"/"+wildcards+"*"+ext)
+		build := func(dir string, depth int) []string {
+			var patterns []string
+			for i, wildcards := 0, ""; i < depth; i, wildcards = i+1, wildcards+"*/" {
+				patterns = append(patterns, dir+"/"+wildcards+"*"+ext)
+			}
+			return patterns
 		}
+		// 로그: 한 단계 위 폴더에서, 시작 스크립트 폴더 아래도 같은 깊이까지 닿도록 한 단계 더 찾는다.
+		if root == RootLog {
+			if parent := build(path.Dir(base), defaultPatternDepth[root]+1); checkFilePattern(parent[0], false) == "" {
+				return parent, ""
+			}
+		}
+		patterns := build(base, defaultPatternDepth[root])
 		// 시작 스크립트가 /opt/start.sh 처럼 얕은 곳에 있으면 /opt 아래 전체를 훑게 되므로 자동으로 찾지 않는다.
 		if problem := checkFilePattern(patterns[0], root == RootINI); problem != "" {
 			return nil, fmt.Sprintf("시작 스크립트 폴더(%s)가 너무 얕아 자동으로 찾지 않습니다 (설정에서 패턴을 적어 주세요)", base)
@@ -546,4 +571,46 @@ func writeFileAtomic(target string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), target)
+}
+
+// AddProcess 는 프로세스 하나를 설정 끝에 더한다. (프로그램 설치)
+// id 는 p.ID 를 바탕으로 겹치지 않게 정한다. (app, app-2, app-3 ...) dryRun 이면 검사만 하고 저장하지 않는다.
+// 다른 항목의 문제는 막지 않고, 이 프로세스의 문제만 알려준다.
+func (s *Store) AddProcess(p Process, dryRun bool) (*Config, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, err := s.load()
+	if err != nil {
+		return nil, "", err
+	}
+	used := map[string]bool{}
+	for _, existing := range config.Processes {
+		used[existing.ID] = true
+	}
+	id := p.ID
+	for n := 2; used[id]; n++ {
+		id = fmt.Sprintf("%s-%d", p.ID, n)
+	}
+	p.ID = id
+	config.Processes = append(config.Processes, p)
+
+	if err := config.Validate(); err != nil {
+		prefix := fmt.Sprintf("processes[%d].", len(config.Processes)-1)
+		var mine []string
+		for _, line := range strings.Split(err.Error(), "\n") {
+			if strings.HasPrefix(line, prefix) {
+				mine = append(mine, strings.TrimPrefix(line, prefix))
+			}
+		}
+		if len(mine) > 0 {
+			return nil, "", &UserError{http.StatusBadRequest, strings.Join(mine, "\n")}
+		}
+	}
+	if dryRun {
+		return config, id, nil
+	}
+	if err := s.write(config); err != nil {
+		return nil, "", err
+	}
+	return config, id, nil
 }

@@ -87,10 +87,10 @@ new=$tmp/$n
 if [ "$kind" = dir ]; then
   [ -d "$new" ] || fail '받은 내용이 폴더가 아닙니다'
   # 기존에 실행 권한이 있던 파일은 새 파일에도 실행 권한을 준다.
-  (cd -- "$new" && find . -type f -exec sh -c 'for f; do [ -x "$0/$f" ] && chmod +x -- "$f"; done; exit 0' "$dst" {} +) || fail '실행 권한을 맞추지 못했습니다'
+  (cd -- "$new" && find . -type f -exec sh -c 'for f; do [ -x "$0/$f" ] && chmod +x "$f"; done; exit 0' "$dst" {} +) || fail '실행 권한을 맞추지 못했습니다'
 else
   [ -f "$new" ] || fail '받은 내용이 파일이 아닙니다'
-  if [ -x "$dst" ]; then chmod +x -- "$new" || fail '실행 권한을 맞추지 못했습니다'; fi
+  if [ -x "$dst" ]; then chmod +x "$new" || fail '실행 권한을 맞추지 못했습니다'; fi
 fi
 trap - EXIT
 printf '%s\n' "$tmp"`
