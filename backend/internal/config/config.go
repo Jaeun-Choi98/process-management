@@ -12,6 +12,16 @@ const (
 	PRODUCT = 1
 )
 
+// 화면 로그인 계정. 비밀번호는 sha256 값(16진수 64자)만 둔다. 바꾸려면 여기를 고치고 다시 빌드한다.
+//
+//	Linux : printf '%s' '비밀번호' | sha256sum
+//	macOS : printf '%s' '비밀번호' | shasum -a 256
+//	( echo 는 끝에 줄바꿈이 붙어 값이 달라지므로 printf 를 쓴다 )
+const (
+	AuthUser           = "admin"
+	AuthPasswordSHA256 = ""
+)
+
 type Configuration struct {
 	// http-rest
 	RestIp   string
@@ -33,6 +43,9 @@ type Configuration struct {
 	// 설치 · 업데이트용 압축 파일을 잠시 받아 두는 폴더와 최대 크기(바이트)
 	UploadDir      string
 	UploadMaxBytes int64
+
+	// 화면 로그인 토큰 만료 시간(분). 계정은 위의 AuthUser · AuthPasswordSHA256 상수.
+	AuthSessionMinutes int
 
 	// log
 	LogLevel string
@@ -57,11 +70,12 @@ func NewConfiguration() (*Configuration, error) {
 		SpaDir:   cfgFile.Section("SPA").Key("DIR").MustString("build"),
 		SpaIndex: cfgFile.Section("SPA").Key("INDEX").MustString("index.html"),
 
-		ProcessesFile:  cfgFile.Section("PROCESSES").Key("FILE").MustString("./data/processes.json"),
-		KnownHostsFile: cfgFile.Section("PROCESSES").Key("KNOWN_HOSTS").MustString("./data/known_hosts"),
-		UploadDir:      cfgFile.Section("UPLOAD").Key("DIR").MustString("./data/upload"),
-		UploadMaxBytes: cfgFile.Section("UPLOAD").Key("MAX_MB").MustInt64(4096) << 20,
-		LogLevel:       cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
+		ProcessesFile:      cfgFile.Section("PROCESSES").Key("FILE").MustString("./data/processes.json"),
+		KnownHostsFile:     cfgFile.Section("PROCESSES").Key("KNOWN_HOSTS").MustString("./data/known_hosts"),
+		UploadDir:          cfgFile.Section("UPLOAD").Key("DIR").MustString("./data/upload"),
+		UploadMaxBytes:     cfgFile.Section("UPLOAD").Key("MAX_MB").MustInt64(4096) << 20,
+		AuthSessionMinutes: cfgFile.Section("AUTH").Key("SESSION_MIN").MustInt(60),
+		LogLevel:           cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
 
 		DeployMode: cfgFile.Section("DEPLOY_SATE").Key("MODE").MustInt(TEST),
 	}

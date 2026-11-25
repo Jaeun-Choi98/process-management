@@ -167,6 +167,14 @@ npm install
 npm start
 ```
 
+**로그인 계정**: `backend/internal/config/config.go` 의 상수 `AuthUser` 와, 비밀번호를 sha256 으로 바꾼 값 `AuthPasswordSHA256` 에 넣고 빌드합니다.
+비밀번호 자체는 소스에 남지 않습니다. `AuthPasswordSHA256` 이 비어 있으면 아무도 로그인할 수 없습니다. (토큰 만료 시간만 `env.ini` `[AUTH] SESSION_MIN`)
+
+```bash
+printf '%s' '비밀번호' | sha256sum        # Linux   (echo 는 줄바꿈이 붙어 값이 달라짐)
+printf '%s' '비밀번호' | shasum -a 256    # macOS
+```
+
 Go 서버 주소가 다르면 `API_PROXY_TARGET=http://localhost:9000 npm start` 처럼 지정합니다.
 `frontend/src/setupProxy.js` 를 수정하면 `npm start` 를 다시 시작해야 합니다.
 
@@ -188,7 +196,8 @@ backend/                     Go 서버 (아래)
 frontend/                    React 화면 (아래)
 
 frontend/src/
-  api/client.ts              API 호출 공통 함수 (fetch 래퍼, 에러 문구 처리)
+  api/client.ts              API 호출 공통 함수 (fetch 래퍼, 로그인 토큰 헤더, 401 이면 로그인 화면, 에러 문구 처리)
+  api/token.ts · auth.ts     로그인 토큰(탭마다 sessionStorage) · 로그인 · 로그아웃 · 내려받기 1회용 표
   types/config.ts            설정(processes.json) · 상태 응답 타입
   utils/schema.ts            설정 검사 (화면 · 가져오기 · 불러오기 공통)
   styles/
@@ -206,8 +215,9 @@ frontend/src/
     WatchEditor/             '조건' 창: 실행 판단 조건 · 자동 재시작 변경, 지금 맞는 프로세스 확인
     ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기 (그룹 주소에서는 그 그룹만)
     MarkdownDialog/          config/README.md · API.md 를 팝업으로 표시 (사이드바 아래 버튼)
+  pages/Login.tsx            로그인 화면 (새 탭 · 새 브라우저 · 토큰 만료 시)
   pages/Dashboard.tsx        그룹 → 서버 → 프로세스 화면 구성, 검색, 사이드바 이동
-  App.tsx                    경로 라우팅 (/ → /all)
+  App.tsx                    로그인 여부, 경로 라우팅 (/ → /all)
   setupProxy.js              npm start 에서 /api 를 Go 서버로 전달
 
 backend/
@@ -219,6 +229,7 @@ backend/
     app/                     시작 · 종료 순서
     config/                  env.ini 로더
     container/               설정 저장소 · 모니터 · REST 서버 조립
+    service/auth-service/    로그인 (config 패키지의 계정 상수, sha256 비교, 탭별 토큰 · 만료 · 연속 실패 잠금)
     service/process-service/
       config.go              설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
       remote.go              SSH 연결 재사용 · 명령 실행 · known_hosts 확인
@@ -229,6 +240,6 @@ backend/
     transport/http-rest/
       rest.go                HTTP 서버 (미들웨어 · SPA 핸들러 연결, 시작 · 종료)
       controller/            /api 경로 등록과 핸들러
-      middleware/            CORS · 요청 로그 · SPA
+      middleware/            CORS · 요청 로그 · SPA · 로그인 확인
       request/               요청 본문 타입
 ```

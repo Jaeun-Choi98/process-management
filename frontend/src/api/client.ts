@@ -1,14 +1,21 @@
+import { getToken, requireLogin } from './token';
+
 /**
  * 사이트 API(Go 서버, npm start 에서는 src/setupProxy.js 가 Go 서버로 전달)를 호출한다.
- * 실패하면 서버가 준 에러 문구를 담아 던진다.
+ * 로그인 토큰을 Authorization 헤더로 싣고, 실패하면 서버가 준 에러 문구를 담아 던진다.
  */
 export async function requestApi<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { cache: 'no-store', ...init });
+  const headers = new Headers(init?.headers);
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(url, { cache: 'no-store', ...init, headers });
   // 본문 없는 성공 (DELETE 등)
   if (response.status === 204) return undefined as T;
   const isJson = (response.headers.get('content-type') ?? '').includes('application/json');
   const body = isJson ? await response.json() : null;
   if (!response.ok) {
+    // 토큰이 없거나 만료됨: 로그인 화면으로 (로그인 화면에서의 실패는 그대로 문구만 보인다)
+    if (response.status === 401) requireLogin();
     throw new Error(body?.error ?? `http ${response.status} ${response.statusText}`);
   }
   // Go 서버가 꺼져 있으면 개발 서버가 index.html 을 돌려주기도 한다.
@@ -25,6 +32,8 @@ export function uploadApi<T>(url: string, body: Blob, contentType: string, onPro
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
     xhr.setRequestHeader('Content-Type', contentType);
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.upload.onprogress = e => onProgress(e.loaded, e.lengthComputable ? e.total : body.size);
     xhr.onerror = () => reject(new Error('서버에 연결하지 못했거나 연결이 끊겼습니다'));
     xhr.onload = () => {
@@ -38,6 +47,7 @@ export function uploadApi<T>(url: string, body: Blob, contentType: string, onPro
         }
       }
       if (xhr.status < 200 || xhr.status >= 300) {
+        if (xhr.status === 401) requireLogin();
         reject(new Error(parsed?.error ?? `http ${xhr.status} ${xhr.statusText}`));
         return;
       }

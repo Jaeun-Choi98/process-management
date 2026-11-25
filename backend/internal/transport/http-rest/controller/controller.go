@@ -9,7 +9,9 @@ import (
 	"path"
 	"strconv"
 
+	auth "pjt/internal/service/auth-service"
 	processes "pjt/internal/service/process-service"
+	"pjt/internal/transport/http-rest/middleware"
 	"pjt/internal/transport/http-rest/request"
 
 	"github.com/Jaeun-Choi98/modules/logger"
@@ -21,20 +23,29 @@ type Controller struct {
 	store   *processes.Store
 	monitor *processes.Monitor
 	uploads *processes.Uploads
+	auth    *auth.Auth
 }
 
-func NewController(store *processes.Store, monitor *processes.Monitor, uploads *processes.Uploads) *Controller {
-	return &Controller{store: store, monitor: monitor, uploads: uploads}
+func NewController(store *processes.Store, monitor *processes.Monitor, uploads *processes.Uploads, a *auth.Auth) *Controller {
+	return &Controller{store: store, monitor: monitor, uploads: uploads, auth: a}
 }
 
 // RoutePath 는 API 를 등록한다. API 는 /api 아래에 두고, 매칭되지 않은 경로는 rest 의 NoRoute(SPA 핸들러)가 처리한다.
 func (ctl *Controller) RoutePath(router *gin.Engine) {
-	store, monitor, uploads := ctl.store, ctl.monitor, ctl.uploads
+	store, monitor, uploads, a := ctl.store, ctl.monitor, ctl.uploads, ctl.auth
 
-	api := router.Group("/api")
-	api.GET("/health", func(c *gin.Context) {
+	public := router.Group("/api")
+	public.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	// 로그인 ( 계정은 config 패키지 상수 ). 아래 API 는 모두 로그인한 토큰이 있어야 한다.
+	public.POST("/login", requireJSON, handleLogin(a))
+	// 전체 로그 내려받기는 링크로 받으므로 토큰 대신 1회용 표(POST /api/download-ticket)로 확인한다.
+	public.GET("/processes/:id/log/download", middleware.RequireTicket(a), handleDownloadLog(monitor))
+
+	api := router.Group("/api", middleware.RequireAuth(a))
+	api.POST("/logout", handleLogout(a))
+	api.POST("/download-ticket", handleDownloadTicket(a))
 
 	// 로그 레벨 조회 및 실행 중 변경 ( 재기동 시 env.ini 값으로 복귀 )
 	// ex) curl 'host/log-config?level=debug'
@@ -46,7 +57,6 @@ func (ctl *Controller) RoutePath(router *gin.Engine) {
 	api.GET("/status", handleStatus(monitor))
 	api.GET("/processes/:id/files", handleFiles(monitor))
 	api.GET("/processes/:id/log", handleLog(monitor))
-	api.GET("/processes/:id/log/download", handleDownloadLog(monitor))
 	api.GET("/processes/:id/ini", handleReadINI(monitor))
 	api.PUT("/processes/:id/ini", requireJSON, handleWriteINI(monitor))
 	api.PUT("/processes/:id/watch", requireJSON, handleUpdateWatch(store, monitor))
@@ -106,6 +116,45 @@ func requireContentType(contentType string) gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// POST /api/login {user, password} → {token}
+func handleLogin(a *auth.Auth) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req request.Login
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "아이디와 비밀번호를 입력하세요"})
+			return
+		}
+		token, err := a.Login(req.User, req.Password, c.ClientIP())
+		if err != nil {
+			var authErr *auth.Error
+			if errors.As(err, &authErr) {
+				logger.Warnf("[REST] login failed: %q, remote: %s, err: %v", req.User, c.ClientIP(), err)
+				c.JSON(authErr.Status, gin.H{"error": authErr.Message})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		logger.Infof("[REST] login: %q, remote: %s", req.User, c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"token": token})
+	}
+}
+
+// POST /api/logout: 이 탭의 토큰을 지운다.
+func handleLogout(a *auth.Auth) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		a.Logout(c.GetString(middleware.TokenKey))
+		c.Status(http.StatusNoContent)
+	}
+}
+
+// POST /api/download-ticket → {ticket}: 30초 안에 한 번 쓸 수 있는 내려받기 표
+func handleDownloadTicket(a *auth.Auth) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ticket": a.Ticket()})
 	}
 }
 

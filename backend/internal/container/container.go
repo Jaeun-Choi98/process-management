@@ -1,7 +1,12 @@
 package container
 
 import (
+	"time"
+
+	"github.com/Jaeun-Choi98/modules/logger"
+
 	"pjt/internal/config"
+	auth "pjt/internal/service/auth-service"
 	processes "pjt/internal/service/process-service"
 	rest "pjt/internal/transport/http-rest"
 	"pjt/internal/transport/http-rest/controller"
@@ -30,7 +35,13 @@ func NewContainer(cfg *config.Configuration) {
 	// 설치 · 업데이트용 압축 파일 임시 보관 ( 전에 남은 파일은 지운다 )
 	uploads := processes.NewUploads(cfg.UploadDir, cfg.UploadMaxBytes)
 
-	n.restServer = rest.New(cfg, controller.NewController(store, monitor, uploads), monitor)
+	// 화면 로그인 ( 계정은 config 패키지 상수, 만료 시간은 env.ini [AUTH] SESSION_MIN )
+	authenticator := auth.New(config.AuthUser, config.AuthPasswordSHA256, time.Duration(cfg.AuthSessionMinutes)*time.Minute)
+	if !authenticator.Configured() {
+		logger.Errorf("[AUTH] config.AuthUser · AuthPasswordSHA256(16진수 64자) 가 설정되지 않아 로그인할 수 없습니다")
+	}
+
+	n.restServer = rest.New(cfg, controller.NewController(store, monitor, uploads, authenticator), monitor)
 
 	myContainer = n
 }

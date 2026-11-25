@@ -11,6 +11,8 @@
 - 개발: `npm start`(`:3000`)가 `/api` 요청을 Go 서버로 전달합니다 (`frontend/src/setupProxy.js`, 주소는 `API_PROXY_TARGET`).
 - 상태를 바꾸는 요청(`PUT`, `POST`)은 `Content-Type: application/json` 이 필요합니다. 아니면 `415` 입니다. (다른 사이트를 통한 요청 차단)
 - 오류 응답은 모두 `{"error": "..."}` 형식입니다.
+- `/api/health`, `/api/login`, 로그 전체 내려받기를 뺀 모든 API 는 로그인 토큰이 필요합니다: `Authorization: Bearer <토큰>`. 없거나 만료되면 `401` 이고, 화면은 로그인 화면으로 돌아갑니다.
+  화면은 토큰을 탭마다 `sessionStorage` 에 두므로 새 탭 · 새 브라우저 창에서는 다시 로그인합니다.
 
 ---
 
@@ -56,6 +58,26 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ---
 
 ## 2. 사이트 API
+
+### POST /api/login
+
+`{"user": "admin", "password": "..."}` → `{"token": "<64자>"}`. 계정은 Go 서버 `internal/config/config.go` 의 `AuthUser` · `AuthPasswordSHA256`(비밀번호의 sha256, 16진수) 상수입니다.
+토큰은 Go 서버 메모리에만 있어 Go 서버를 다시 시작하면 모두 만료되고, `SESSION_MIN`(기본 60분) 동안 쓰지 않아도 만료됩니다.
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | 아이디 또는 비밀번호가 비어 있음 |
+| `401` | 아이디 또는 비밀번호가 맞지 않음 |
+| `429` | 같은 IP 에서 5번 연달아 틀려 1분 동안 막힘 |
+| `503` | `AuthUser` 가 비어 있거나 `AuthPasswordSHA256` 이 16진수 64자가 아님 |
+
+### POST /api/logout
+
+이 토큰을 만료시킵니다. `204`.
+
+### POST /api/download-ticket
+
+`{"ticket": "..."}`. 로그 전체 내려받기처럼 헤더를 실을 수 없는 링크에 붙이는 1회용 표입니다. 30초 안에 한 번만 쓸 수 있습니다.
 
 ### GET /api/config
 
@@ -187,9 +209,11 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 또는 tail 실패 (파일 없음 · 권한 없음 등, 서버의 오류 문구 포함) |
 
-### GET /api/processes/:id/log/download?path=/opt/shelter/logs/app.log
+### GET /api/processes/:id/log/download?path=/opt/shelter/logs/app.log&ticket=...
 
 로그 파일 패턴에 맞는 파일 전체를 첨부 파일로 내려받습니다. (`Content-Disposition: attachment`)
+
+- 링크로 받으므로 토큰 대신 `POST /api/download-ticket` 으로 받은 1회용 표(`ticket`)가 필요합니다. 없거나 이미 썼거나 30초가 지났으면 `401` 입니다.
 
 - 시작할 때 잰 크기만큼만 보내고 `Content-Length` 로 알려줍니다. (받는 동안 로그가 늘어나도 길이가 맞도록)
 - Go 서버는 파일을 메모리에 모으지 않고 SSH 출력을 그대로 흘려보냅니다. 브라우저에서 취소하면 서버 쪽 명령도 멈춥니다.
@@ -199,6 +223,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | 상태 코드 | 의미 |
 |---|---|
 | `400` | 패턴이 등록되지 않음, 패턴에 맞지 않는 경로 |
+| `401` | 1회용 표가 없거나 만료됨 |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패, 파일 없음 · 권한 없음 |
 

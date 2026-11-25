@@ -27,9 +27,10 @@ interface DashboardProps {
   /** URL 의 그룹 slug. "all" 이면 전체 그룹 */
   slug: string;
   navigate: (to: string) => void;
+  onLogout: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
+const Dashboard: React.FC<DashboardProps> = ({ slug, navigate, onLogout }) => {
   const { config, loading, error, reload, refresh, save, apply } = useProcessConfig();
   const [filter, setFilter] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
@@ -150,7 +151,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
 
   return (
     <div>
-      <Header groups={groups} currentSlug={slug} navigate={navigate} />
+      <Header groups={groups} currentSlug={slug} navigate={navigate} onLogout={onLogout} />
       <div className="page">
         <div className="dashboard-layout">
           {config && (

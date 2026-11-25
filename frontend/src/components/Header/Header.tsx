@@ -8,6 +8,7 @@ interface HeaderProps {
   /** 지금 보고 있는 그룹 slug ("all" 이면 전체) */
   currentSlug: string;
   navigate: (to: string) => void;
+  onLogout: () => void;
 }
 
 /**
@@ -16,7 +17,7 @@ interface HeaderProps {
  *   /uw (그룹)    그 그룹 탭만 (다른 그룹으로 가는 탭을 보여주지 않는다. 로고도 그 그룹으로 간다)
  *   없는 그룹     전체 + 모든 그룹 탭 (돌아갈 곳을 고를 수 있게)
  */
-const Header: React.FC<HeaderProps> = ({ groups, currentSlug, navigate }) => {
+const Header: React.FC<HeaderProps> = ({ groups, currentSlug, navigate, onLogout }) => {
   const currentGroup = groups.find(g => g.slug === currentSlug);
   const tabs = currentGroup ? [currentGroup] : [{ slug: 'all', name: '전체' }, ...groups];
   const home = currentGroup ? `/${currentGroup.slug}` : '/all';
@@ -45,6 +46,7 @@ const Header: React.FC<HeaderProps> = ({ groups, currentSlug, navigate }) => {
           </a>
         ))}
       </div>
+      <button className="btn-text navbar-logout" type="button" onClick={onLogout}>로그아웃</button>
     </nav>
   );
 };

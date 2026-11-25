@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../Icon/Icon';
 import { FileList, ProcessEntry } from '../../types/config';
 import { requestApi } from '../../api/client';
+import { downloadTicket } from '../../api/auth';
 import IniEditor from '../IniEditor/IniEditor';
 import { effectivePatterns } from '../../utils/schema';
 import './LogViewer.css';
@@ -151,6 +152,23 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
     URL.revokeObjectURL(link.href);
   };
 
+  /**
+   * 전체 파일은 Go 서버가 첨부 파일로 흘려보낸다. 링크에는 토큰 헤더를 실을 수 없으므로
+   * 30초짜리 1회용 표를 받아 주소에 붙인다.
+   */
+  const downloadFull = async () => {
+    if (file === null) return;
+    try {
+      const ticket = await downloadTicket();
+      const link = document.createElement('a');
+      link.href = `${PROCESSES_API}/${encodeURIComponent(target.id)}/log/download?path=${encodeURIComponent(file)}&ticket=${encodeURIComponent(ticket)}`;
+      link.download = '';
+      link.click();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div className="log-viewer-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}>
       <div className="log-viewer" role="dialog" aria-modal="true" aria-label={root === 'ini' ? 'INI 편집' : '로그 보기'}>
@@ -270,15 +288,10 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
                   화면 내용
                 </button>
                 {/* 전체 파일은 Go 서버가 첨부 파일로 보낸다. (큰 파일도 메모리에 모으지 않고 흘려보낸다) */}
-                <a
-                  className="btn btn-secondary"
-                  href={`${PROCESSES_API}/${encodeURIComponent(target.id)}/log/download?path=${encodeURIComponent(file)}`}
-                  download
-                  title="파일 전체를 내려받습니다"
-                >
+                <button className="btn btn-secondary" onClick={downloadFull} title="파일 전체를 내려받습니다">
                   <Icon name="download" />
                   전체 파일
-                </a>
+                </button>
               </span>
               <span className="log-viewer-time">{fetchedAt && fetchedAt.toLocaleTimeString()}</span>
             </div>
