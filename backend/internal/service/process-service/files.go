@@ -3,6 +3,7 @@ package processes
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,6 +75,10 @@ func (m *Monitor) Files(ctx context.Context, processID, root string) (*FileList,
 	// 맞는 파일이 없는 패턴은 ls 가 "없음" 오류를 내므로 오류 출력과 종료 코드는 무시한다.
 	command := fmt.Sprintf("LC_ALL=C ls -lndt -- %s 2>/dev/null | head -n %d; exit 0", strings.Join(patterns, " "), maxLogEntries+1)
 	output, err := m.remote.run(ctx, server, command)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// 찾을 폴더 아래가 넓어(예: 시작 스크립트 위 폴더가 홈) 셸이 패턴을 다 펼치지 못했다.
+		return nil, &UserError{http.StatusGatewayTimeout, searchTimeoutMessage(root)}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -237,6 +242,18 @@ func filePatterns(process Process, root string) ([]string, error) {
 		return nil, &UserError{http.StatusBadRequest, problem}
 	}
 	return patterns, nil
+}
+
+// searchTimeoutMessage 는 파일 목록을 시간 안에 찾지 못했을 때 화면에 보여줄 문구다.
+func searchTimeoutMessage(root string) string {
+	ext, what, pick := ".log", "로그", "로그 폴더"
+	if root == RootINI {
+		ext, what, pick = ".ini", "INI", "INI 파일"
+	}
+	return fmt.Sprintf("%s 로 끝나는 파일을 찾을 수 없습니다.\n"+
+		"찾는 폴더 아래에 폴더가 너무 많아 %d초 안에 찾지 못했습니다. "+
+		"상단 [설정]에서 이 프로세스의 %s 파일 칸에 [찾아보기]로 %s를 골라 저장한 뒤 다시 열어 주세요.",
+		ext, int(commandTimeout.Seconds()), what, pick)
 }
 
 // resolveFile 은 화면이 고른 파일이 등록한 패턴에 맞는지 확인한다. 맞지 않으면 열지 않는다.

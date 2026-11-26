@@ -223,6 +223,13 @@ func TestMonitorOverSSH(t *testing.T) {
 	if list, err := monitor.Files(ctx, "auto", RootINI); err != nil || len(list.Entries) != 2 {
 		t.Errorf("auto ini files = %+v, %v", list, err)
 	}
+	// 시간 안에 다 찾지 못하면(폴더가 너무 넓음) 원인과 할 일을 알려준다.
+	expired, cancelExpired := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	_, err = monitor.Files(expired, "auto", RootLog)
+	cancelExpired()
+	if !isStatus(err, http.StatusGatewayTimeout) || !strings.HasPrefix(err.Error(), ".log 로 끝나는 파일을 찾을 수 없습니다.") || !strings.Contains(err.Error(), "[찾아보기]") {
+		t.Errorf("files timeout: %v", err)
+	}
 	if output, err := monitor.Log(ctx, "auto", appLog, 1); err != nil || output != "line3\n" {
 		t.Errorf("auto log = %q, %v", output, err)
 	}
